@@ -221,15 +221,20 @@ def get_games_today() -> dict:
     try:
         scoreboard = ScoreboardV3(game_date=today)
         game_header = scoreboard.game_header.get_data_frame()
+        line_score = scoreboard.line_score.get_data_frame()
 
         live_games = []
-        for _, row in game_header.iterrows():
-            live_games.append(
-                {
-                    "game_id": str(row.get("gameId", "")),
-                    "matchup": f"{row.get('awayTeamName', '')} vs. {row.get('homeTeamName', '')}",
-                }
-            )
+        for _, game_row in game_header.iterrows():
+            game_id = str(game_row.get("gameId", ""))
+            # LineScore has 2 rows per game: away team first, home team second.
+            teams = line_score[line_score["gameId"].astype(str) == game_id]
+            if len(teams) >= 2:
+                away_tri = teams.iloc[0].get("teamTricode", "")
+                home_tri = teams.iloc[1].get("teamTricode", "")
+                matchup = f"{away_tri} @ {home_tri}"
+            else:
+                matchup = game_row.get("gameCode", "TBD")
+            live_games.append({"game_id": game_id, "matchup": matchup})
         logger.info("ScoreboardV3 returned %d games.", len(live_games))
         return {"date": today, "source": "live", "games": live_games}
     except Exception as exc:

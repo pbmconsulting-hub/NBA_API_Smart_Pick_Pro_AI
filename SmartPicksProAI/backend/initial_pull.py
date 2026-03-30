@@ -125,7 +125,7 @@ def build_players_df(raw: pd.DataFrame) -> pd.DataFrame:
         ``is_active``.
     """
     raw_subset = raw[["PLAYER_ID", "PLAYER_NAME", "TEAM_ID", "TEAM_ABBREVIATION"]].copy()
-    players = raw_subset.drop_duplicates(subset="PLAYER_ID")
+    players = raw_subset.drop_duplicates(subset="PLAYER_ID").copy()
 
     name_parts = players["PLAYER_NAME"].str.split(" ", n=1, expand=True)
     players["first_name"] = name_parts[0].str.strip()
