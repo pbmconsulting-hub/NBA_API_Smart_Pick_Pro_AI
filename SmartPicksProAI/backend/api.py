@@ -119,8 +119,16 @@ def get_player_last5(player_id: int) -> dict:
             """
             SELECT
                 g.game_date,
+                g.season,
+                g.home_abbrev,
+                g.away_abbrev,
                 l.game_id,
-                l.pts, l.reb, l.ast, l.blk, l.stl, l.tov, l.min
+                l.min,
+                l.pts, l.reb, l.ast, l.blk, l.stl, l.tov,
+                l.fgm, l.fga, l.fg_pct,
+                l.fg3m, l.fg3a, l.fg3_pct,
+                l.ftm, l.fta, l.ft_pct,
+                l.oreb, l.dreb, l.pf, l.plus_minus
             FROM Player_Game_Logs l
             JOIN Games g ON g.game_id = l.game_id
             WHERE l.player_id = ?
@@ -132,7 +140,13 @@ def get_player_last5(player_id: int) -> dict:
 
         games = [dict(row) for row in rows]
 
-        stat_keys = ["pts", "reb", "ast", "blk", "stl", "tov"]
+        stat_keys = [
+            "pts", "reb", "ast", "blk", "stl", "tov",
+            "fgm", "fga", "fg_pct",
+            "fg3m", "fg3a", "fg3_pct",
+            "ftm", "fta", "ft_pct",
+            "oreb", "dreb", "pf", "plus_minus",
+        ]
         if games:
             averages = {
                 k: round(sum(g[k] or 0 for g in games) / len(games), 1)
@@ -185,7 +199,7 @@ def get_games_today() -> dict:
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT game_id, game_date, matchup FROM Games WHERE game_date = ?",
+            "SELECT game_id, game_date, season, home_abbrev, away_abbrev, matchup FROM Games WHERE game_date = ?",
             (today,),
         ).fetchall()
     except Exception as exc:

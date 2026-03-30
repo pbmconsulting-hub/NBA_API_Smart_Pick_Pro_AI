@@ -37,6 +37,42 @@ SEASON = "2025-26"
 # NBA API date format for the date_from_nullable / date_to_nullable params.
 _NBA_DATE_FMT = "%m/%d/%Y"
 
+# Mapping from NBA API column names to Player_Game_Logs DB column names.
+STAT_COLS_MAP = {
+    "PLAYER_ID": "player_id",
+    "GAME_ID":   "game_id",
+    "MIN":       "min",
+    "PTS":       "pts",
+    "REB":       "reb",
+    "AST":       "ast",
+    "STL":       "stl",
+    "BLK":       "blk",
+    "TOV":       "tov",
+    "FGM":       "fgm",
+    "FGA":       "fga",
+    "FG_PCT":    "fg_pct",
+    "FG3M":      "fg3m",
+    "FG3A":      "fg3a",
+    "FG3_PCT":   "fg3_pct",
+    "FTM":       "ftm",
+    "FTA":       "fta",
+    "FT_PCT":    "ft_pct",
+    "OREB":      "oreb",
+    "DREB":      "dreb",
+    "PF":        "pf",
+    "PLUS_MINUS": "plus_minus",
+}
+
+# Integer stat columns (filled with 0 for DNP players).
+_INT_STAT_COLS = [
+    "pts", "reb", "ast", "stl", "blk", "tov",
+    "fgm", "fga", "fg3m", "fg3a", "ftm", "fta",
+    "oreb", "dreb", "pf",
+]
+
+# Float/percentage stat columns (filled with 0.0 for DNP players).
+_FLOAT_STAT_COLS = ["fg_pct", "fg3_pct", "ft_pct", "plus_minus"]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -112,28 +148,47 @@ def _parse_game_date(series: pd.Series) -> pd.Series:
 
 
 def _upsert_players(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
-    """Insert any players from *raw* that are not already in the Players table.
+    """Insert or update players from *raw* in the Players table.
+
+    Uses INSERT OR REPLACE so that rows whose ``team_id`` or
+    ``team_abbreviation`` has changed (e.g. due to a trade) are updated in
+    place.
 
     Args:
         raw: Raw game-log DataFrame.
         conn: Open SQLite connection.
     """
-    players = raw[["PLAYER_ID", "PLAYER_NAME", "TEAM_ID"]].drop_duplicates("PLAYER_ID").copy()
-    name_parts = players["PLAYER_NAME"].str.split(" ", n=1, expand=True)
-    players["first_name"] = name_parts[0].str.strip()
-    players["last_name"] = name_parts[1].str.strip() if 1 in name_parts.columns else ""
-    players = players.rename(columns={"PLAYER_ID": "player_id", "TEAM_ID": "team_id"})
-    players = players[["player_id", "first_name", "last_name", "team_id"]]
+    raw_subset = raw[["PLAYER_ID", "PLAYER_NAME", "TEAM_ID", "TEAM_ABBREVIATION"]].drop_duplicates("PLAYER_ID").copy()
+    name_parts = raw_subset["PLAYER_NAME"].str.split(" ", n=1, expand=True)
+    raw_subset["first_name"] = name_parts[0].str.strip()
+    raw_subset["last_name"] = name_parts[1].str.strip() if 1 in name_parts.columns else ""
+    raw_subset = raw_subset.rename(columns={"PLAYER_ID": "player_id", "TEAM_ID": "team_id"})
+    raw_subset["full_name"] = raw_subset["PLAYER_NAME"]
+    raw_subset["team_abbreviation"] = raw_subset["TEAM_ABBREVIATION"]
+    raw_subset["position"] = None
+    raw_subset["is_active"] = 1
+    players = raw_subset[
+        ["player_id", "first_name", "last_name", "full_name",
+         "team_id", "team_abbreviation", "position", "is_active"]
+    ]
 
-    existing = pd.read_sql("SELECT player_id FROM Players", conn)
-    new_rows = players[~players["player_id"].isin(existing["player_id"])]
-    if not new_rows.empty:
-        new_rows.to_sql("Players", conn, if_exists="append", index=False)
-        logger.info("Players: inserted %d new rows.", len(new_rows))
+    cursor = conn.cursor()
+    cols = list(players.columns)
+    placeholders = ", ".join("?" for _ in cols)
+    col_names = ", ".join(cols)
+    sql = f"INSERT OR REPLACE INTO Players ({col_names}) VALUES ({placeholders})"
+    cursor.executemany(sql, players.itertuples(index=False, name=None))
+    if len(players):
+        logger.info("Players: upserted %d rows.", len(players))
 
 
 def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
     """Insert any games from *raw* that are not already in the Games table.
+
+    Parses ``home_abbrev`` and ``away_abbrev`` from the MATCHUP string:
+
+    - ``'LAL vs. BOS'`` → home is left abbreviation (``LAL``).
+    - ``'LAL @ BOS'``   → home is right abbreviation (``BOS``).
 
     Args:
         raw: Raw game-log DataFrame.
@@ -145,6 +200,32 @@ def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
         columns={"GAME_ID": "game_id", "GAME_DATE": "game_date", "MATCHUP": "matchup"}
     )
 
+    games["season"] = SEASON
+    games["home_team_id"] = None
+    games["away_team_id"] = None
+
+    def _parse_abbrevs(matchup: str):
+        if " vs. " in matchup:
+            parts = matchup.split(" vs. ", 1)
+            return parts[0].strip(), parts[1].strip()
+        if " @ " in matchup:
+            parts = matchup.split(" @ ", 1)
+            return parts[1].strip(), parts[0].strip()
+        return None, None
+
+    if not games.empty:
+        home_abbrevs, away_abbrevs = zip(*games["matchup"].map(_parse_abbrevs))
+        games["home_abbrev"] = list(home_abbrevs)
+        games["away_abbrev"] = list(away_abbrevs)
+    else:
+        games["home_abbrev"] = []
+        games["away_abbrev"] = []
+
+    games = games[
+        ["game_id", "game_date", "season", "home_team_id", "away_team_id",
+         "home_abbrev", "away_abbrev", "matchup"]
+    ]
+
     existing = pd.read_sql("SELECT game_id FROM Games", conn)
     new_rows = games[~games["game_id"].isin(existing["game_id"])]
     if not new_rows.empty:
@@ -155,9 +236,12 @@ def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
 def _upsert_logs(raw: pd.DataFrame, conn: sqlite3.Connection) -> int:
     """Insert new player-game log rows that are not already in the database.
 
+    Captures the full set of stat columns defined in :data:`STAT_COLS_MAP`.
+
     **DNP handling:** Players who did not play (0 minutes, null/None stats)
-    have their numeric stat columns set to ``0`` and ``min`` set to
-    ``'0:00'`` so downstream ML math never encounters NaN values.
+    have their integer stat columns set to ``0``, float/percentage columns set
+    to ``0.0``, and ``min`` set to ``'0:00'`` so downstream ML math never
+    encounters NaN values.
 
     Args:
         raw: Raw game-log DataFrame.
@@ -166,26 +250,19 @@ def _upsert_logs(raw: pd.DataFrame, conn: sqlite3.Connection) -> int:
     Returns:
         Number of new rows inserted into ``Player_Game_Logs``.
     """
-    logs = raw[["PLAYER_ID", "GAME_ID", "PTS", "REB", "AST", "BLK", "STL", "TOV", "MIN"]].copy()
-    logs = logs.rename(
-        columns={
-            "PLAYER_ID": "player_id",
-            "GAME_ID": "game_id",
-            "PTS": "pts",
-            "REB": "reb",
-            "AST": "ast",
-            "BLK": "blk",
-            "STL": "stl",
-            "TOV": "tov",
-            "MIN": "min",
-        }
-    )
+    available_cols = [c for c in STAT_COLS_MAP if c in raw.columns]
+    logs = raw[available_cols].copy()
+    logs = logs.rename(columns={k: v for k, v in STAT_COLS_MAP.items() if k in available_cols})
 
     # --- DNP / inactive edge-case handling ---
-    stat_cols = ["pts", "reb", "ast", "blk", "stl", "tov"]
-    for col in stat_cols:
-        logs[col] = pd.to_numeric(logs[col], errors="coerce").fillna(0).astype(int)
-    logs["min"] = logs["min"].fillna("0:00").replace("", "0:00")
+    for col in _INT_STAT_COLS:
+        if col in logs.columns:
+            logs[col] = pd.to_numeric(logs[col], errors="coerce").fillna(0).astype(int)
+    for col in _FLOAT_STAT_COLS:
+        if col in logs.columns:
+            logs[col] = pd.to_numeric(logs[col], errors="coerce").fillna(0.0)
+    if "min" in logs.columns:
+        logs["min"] = logs["min"].fillna("0:00").replace("", "0:00")
 
     existing = pd.read_sql("SELECT player_id, game_id FROM Player_Game_Logs", conn)
     if existing.empty:
