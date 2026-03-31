@@ -38,6 +38,7 @@ SEASON = "2025-26"
 STAT_COLS_MAP = {
     "PLAYER_ID": "player_id",
     "GAME_ID":   "game_id",
+    "WL":        "wl",
     "MIN":       "min",
     "PTS":       "pts",
     "REB":       "reb",
@@ -69,6 +70,25 @@ _INT_STAT_COLS = [
 
 # Float/percentage stat columns (filled with 0.0 for DNP players).
 _FLOAT_STAT_COLS = ["fg_pct", "fg3_pct", "ft_pct", "plus_minus"]
+
+# Conference and division lookup keyed by team abbreviation.
+_TEAM_CONFERENCE_DIVISION: dict[str, tuple[str, str]] = {
+    "ATL": ("East", "Southeast"), "BOS": ("East", "Atlantic"),
+    "BKN": ("East", "Atlantic"),  "CHA": ("East", "Southeast"),
+    "CHI": ("East", "Central"),   "CLE": ("East", "Central"),
+    "DAL": ("West", "Southwest"), "DEN": ("West", "Northwest"),
+    "DET": ("East", "Central"),   "GSW": ("West", "Pacific"),
+    "HOU": ("West", "Southwest"), "IND": ("East", "Central"),
+    "LAC": ("West", "Pacific"),   "LAL": ("West", "Pacific"),
+    "MEM": ("West", "Southwest"), "MIA": ("East", "Southeast"),
+    "MIL": ("East", "Central"),   "MIN": ("West", "Northwest"),
+    "NOP": ("West", "Southwest"), "NYK": ("East", "Atlantic"),
+    "OKC": ("West", "Northwest"), "ORL": ("East", "Southeast"),
+    "PHI": ("East", "Atlantic"),  "PHX": ("West", "Pacific"),
+    "POR": ("West", "Northwest"), "SAC": ("West", "Pacific"),
+    "SAS": ("West", "Southwest"), "TOR": ("East", "Atlantic"),
+    "UTA": ("West", "Northwest"), "WAS": ("East", "Southeast"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -311,8 +331,13 @@ def build_team_game_stats_df(raw_team: pd.DataFrame) -> pd.DataFrame:
     - ``opponent_team_id`` — the other team's TEAM_ID in the same game.
     - ``points_allowed`` — the opponent's PTS in the same game.
 
-    ``pace_est``, ``ortg_est``, and ``drtg_est`` are left as ``None`` (they
-    require advanced box-score calculations and can be populated later).
+    Also computes per-game estimates for ``pace_est``, ``ortg_est``, and
+    ``drtg_est`` from the available box-score data::
+
+        possessions ≈ FGA + 0.44 × FTA − OREB + TOV
+        pace        = 48 × avg(poss, opp_poss) / (team_minutes / 5)
+        ortg        = 100 × PTS / poss
+        drtg        = 100 × opp_PTS / opp_poss
 
     Args:
         raw_team: Raw DataFrame returned by :func:`fetch_team_season_logs`.
@@ -329,26 +354,64 @@ def build_team_game_stats_df(raw_team: pd.DataFrame) -> pd.DataFrame:
                      "ortg_est", "drtg_est"]
         )
 
-    df = raw_team[["GAME_ID", "TEAM_ID", "MATCHUP", "PTS"]].copy()
+    needed = ["GAME_ID", "TEAM_ID", "MATCHUP", "PTS", "FGA", "FTA", "OREB", "TOV", "MIN"]
+    df = raw_team[needed].copy()
     df = df.rename(columns={
         "GAME_ID": "game_id",
         "TEAM_ID": "team_id",
         "PTS": "points_scored",
+        "FGA": "fga",
+        "FTA": "fta",
+        "OREB": "oreb",
+        "TOV": "tov",
+        "MIN": "min_played",
     })
     df["is_home"] = df["MATCHUP"].str.contains(" vs. ", na=False).astype(int)
     df = df.drop(columns=["MATCHUP"])
 
-    # Self-join to find opponent's team_id and PTS for each game.
-    opp = df[["game_id", "team_id", "points_scored"]].rename(columns={
+    # Coerce box-score columns to numeric for the pace calculations.
+    for col in ("fga", "fta", "oreb", "tov"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # MIN from team logs can be int (240) or string ("240:00").
+    min_raw = df["min_played"].astype(str)
+    if min_raw.str.contains(":").any():
+        min_raw = min_raw.str.split(":").str[0]
+    df["min_played"] = pd.to_numeric(min_raw, errors="coerce").fillna(240)
+
+    # Self-join to find opponent's team_id, PTS, and box-score data.
+    opp = df[["game_id", "team_id", "points_scored",
+              "fga", "fta", "oreb", "tov", "min_played"]].rename(columns={
         "team_id": "opponent_team_id",
         "points_scored": "points_allowed",
+        "fga": "opp_fga",
+        "fta": "opp_fta",
+        "oreb": "opp_oreb",
+        "tov": "opp_tov",
+        "min_played": "opp_min",
     })
     merged = df.merge(opp, on="game_id")
     merged = merged[merged["team_id"] != merged["opponent_team_id"]]
 
-    merged["pace_est"] = None
-    merged["ortg_est"] = None
-    merged["drtg_est"] = None
+    # Possession estimates.
+    merged["poss"] = (
+        merged["fga"] + 0.44 * merged["fta"] - merged["oreb"] + merged["tov"]
+    )
+    merged["opp_poss"] = (
+        merged["opp_fga"] + 0.44 * merged["opp_fta"]
+        - merged["opp_oreb"] + merged["opp_tov"]
+    )
+
+    # Guard against division by zero.
+    safe_poss = merged["poss"].replace(0, float("nan"))
+    safe_opp_poss = merged["opp_poss"].replace(0, float("nan"))
+    game_min = (merged["min_played"] / 5).replace(0, float("nan"))
+
+    merged["pace_est"] = (
+        48 * (merged["poss"] + merged["opp_poss"]) / 2 / game_min
+    ).round(1)
+    merged["ortg_est"] = (100 * merged["points_scored"] / safe_poss).round(1)
+    merged["drtg_est"] = (100 * merged["points_allowed"] / safe_opp_poss).round(1)
 
     result = merged[
         ["game_id", "team_id", "opponent_team_id", "is_home",
@@ -401,8 +464,12 @@ def seed_teams_from_api(conn: sqlite3.Connection) -> None:
 
     # Keep only columns that exist in the Teams schema.
     teams = teams[["team_id", "abbreviation", "team_name"]]
-    teams["conference"] = None
-    teams["division"] = None
+    teams["conference"] = teams["abbreviation"].map(
+        lambda a: _TEAM_CONFERENCE_DIVISION.get(a, (None, None))[0]
+    )
+    teams["division"] = teams["abbreviation"].map(
+        lambda a: _TEAM_CONFERENCE_DIVISION.get(a, (None, None))[1]
+    )
     teams["pace"] = None
     teams["ortg"] = None
     teams["drtg"] = None
@@ -485,6 +552,42 @@ def load_team_game_stats(
         return
     new_rows.to_sql("Team_Game_Stats", conn, if_exists="append", index=False)
     logger.info("Team_Game_Stats table: inserted %d new rows.", len(new_rows))
+
+
+def populate_game_scores(conn: sqlite3.Connection) -> None:
+    """Back-fill ``home_score`` and ``away_score`` in the Games table.
+
+    Uses data already loaded in ``Team_Game_Stats`` to set the scores for
+    every game whose ``home_team_id`` and ``away_team_id`` are known and
+    whose scores have not yet been populated.
+
+    Args:
+        conn: Open SQLite connection.
+    """
+    updated = conn.execute(
+        """
+        UPDATE Games SET
+            home_score = (
+                SELECT tgs.points_scored
+                FROM Team_Game_Stats tgs
+                WHERE tgs.game_id = Games.game_id
+                  AND tgs.team_id = Games.home_team_id
+            ),
+            away_score = (
+                SELECT tgs.points_scored
+                FROM Team_Game_Stats tgs
+                WHERE tgs.game_id = Games.game_id
+                  AND tgs.team_id = Games.away_team_id
+            )
+        WHERE home_team_id IS NOT NULL
+          AND away_team_id IS NOT NULL
+          AND home_score IS NULL
+        """
+    ).rowcount
+    if updated:
+        logger.info("Games: back-filled scores for %d rows.", updated)
+    else:
+        logger.info("Games: no scores to back-fill.")
 
 
 def fetch_and_load_rosters(
@@ -623,6 +726,9 @@ def run_initial_pull(db_path: str = DB_PATH, season: str = SEASON) -> None:
         load_games(games_df, conn)
         load_logs(logs_df, conn)
         load_team_game_stats(team_stats_df, conn)
+
+        # Back-fill home/away scores from Team_Game_Stats into Games.
+        populate_game_scores(conn)
         conn.commit()
 
         # --- Rosters (rate-limited: 1 req / team) ---

@@ -282,6 +282,8 @@ game logs between the last stored date and yesterday, then appends new rows.
 | `home_abbrev` | TEXT | e.g. `"LAL"` |
 | `away_abbrev` | TEXT | e.g. `"BOS"` |
 | `matchup` | TEXT | e.g. `"LAL vs. BOS"` |
+| `home_score` | INTEGER | Home team points |
+| `away_score` | INTEGER | Away team points |
 
 **Player_Game_Logs**
 
@@ -289,6 +291,7 @@ game logs between the last stored date and yesterday, then appends new rows.
 |---|---|---|
 | `player_id` | INTEGER | Composite PK, FK → Players |
 | `game_id` | TEXT | Composite PK, FK → Games |
+| `wl` | TEXT | Win/Loss (`W` or `L`) |
 | `min` | TEXT | Minutes played (`0:00` for DNP) |
 | `pts` | INTEGER | Points (0 for DNP) |
 | `reb` | INTEGER | Rebounds |

@@ -61,7 +61,9 @@ CREATE TABLE IF NOT EXISTS Games (
     away_team_id   INTEGER,
     home_abbrev    TEXT,
     away_abbrev    TEXT,
-    matchup        TEXT
+    matchup        TEXT,
+    home_score     INTEGER,
+    away_score     INTEGER
 );
 """
 
@@ -71,6 +73,7 @@ CREATE_PLAYER_GAME_LOGS = """
 CREATE TABLE IF NOT EXISTS Player_Game_Logs (
     player_id   INTEGER NOT NULL REFERENCES Players(player_id),
     game_id     TEXT    NOT NULL REFERENCES Games(game_id),
+    wl          TEXT,
     min         TEXT,
     pts         INTEGER,
     reb         INTEGER,
@@ -165,10 +168,13 @@ _GAMES_ALTER = [
     "ALTER TABLE Games ADD COLUMN away_team_id INTEGER",
     "ALTER TABLE Games ADD COLUMN home_abbrev TEXT",
     "ALTER TABLE Games ADD COLUMN away_abbrev TEXT",
+    "ALTER TABLE Games ADD COLUMN home_score INTEGER",
+    "ALTER TABLE Games ADD COLUMN away_score INTEGER",
 ]
 
 # New stat columns added to Player_Game_Logs for existing databases.
 _LOGS_ALTER = [
+    "ALTER TABLE Player_Game_Logs ADD COLUMN wl TEXT",
     "ALTER TABLE Player_Game_Logs ADD COLUMN fgm INTEGER",
     "ALTER TABLE Player_Game_Logs ADD COLUMN fga INTEGER",
     "ALTER TABLE Player_Game_Logs ADD COLUMN fg_pct REAL",

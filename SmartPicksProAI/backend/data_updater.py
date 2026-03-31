@@ -43,6 +43,7 @@ _NBA_DATE_FMT = "%m/%d/%Y"
 STAT_COLS_MAP = {
     "PLAYER_ID": "player_id",
     "GAME_ID":   "game_id",
+    "WL":        "wl",
     "MIN":       "min",
     "PTS":       "pts",
     "REB":       "reb",
@@ -424,6 +425,9 @@ def run_update(db_path: str = DB_PATH) -> int:
         # Also update Team_Game_Stats from team-level logs.
         raw_team = _fetch_team_logs_for_range(date_from, yesterday)
         _upsert_team_game_stats(raw_team, conn)
+
+        # Back-fill home/away scores from Team_Game_Stats into Games.
+        initial_pull.populate_game_scores(conn)
 
         conn.commit()
         logger.info(

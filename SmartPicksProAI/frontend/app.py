@@ -161,6 +161,13 @@ if games:
     cols = st.columns(min(len(games), 4))
     for idx, game in enumerate(games):
         with cols[idx % len(cols)]:
+            score_line = ""
+            if game.get("home_score") is not None and game.get("away_score") is not None:
+                score_line = (
+                    f'<span style="color:#c9d1d9;font-size:0.85rem;">'
+                    f'{game.get("home_score", "")} – {game.get("away_score", "")}'
+                    f'</span><br>'
+                )
             st.markdown(
                 f"""
                 <div style="
@@ -174,6 +181,7 @@ if games:
                     <span style="color:#58a6ff;font-weight:600;">
                         {game.get("matchup", "TBD")}
                     </span><br>
+                    {score_line}
                     <span style="color:#8b949e;font-size:0.75rem;">
                         {game.get("game_id", "")}
                     </span>
@@ -265,7 +273,7 @@ if selected_player_id and st.button("Load Player Card"):
             display_cols = [
                 c
                 for c in [
-                    "game_date", "matchup", "pts", "reb", "ast", "blk",
+                    "game_date", "matchup", "wl", "pts", "reb", "ast", "blk",
                     "stl", "tov", "fgm", "fga", "fg_pct", "fg3m", "fg3a",
                     "fg3_pct", "ftm", "fta", "ft_pct", "oreb", "dreb", "pf",
                     "plus_minus", "min",

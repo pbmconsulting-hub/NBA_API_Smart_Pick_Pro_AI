@@ -123,7 +123,10 @@ def get_player_last5(player_id: int) -> dict:
                 g.home_abbrev,
                 g.away_abbrev,
                 g.matchup,
+                g.home_score,
+                g.away_score,
                 l.game_id,
+                l.wl,
                 l.min,
                 l.pts, l.reb, l.ast, l.blk, l.stl, l.tov,
                 l.fgm, l.fga, l.fg_pct,
@@ -201,7 +204,8 @@ def get_games_today() -> dict:
     try:
         rows = conn.execute(
             "SELECT game_id, game_date, season, home_team_id, away_team_id, "
-            "home_abbrev, away_abbrev, matchup FROM Games WHERE game_date = ?",
+            "home_abbrev, away_abbrev, matchup, home_score, away_score "
+            "FROM Games WHERE game_date = ?",
             (today,),
         ).fetchall()
     except Exception as exc:
