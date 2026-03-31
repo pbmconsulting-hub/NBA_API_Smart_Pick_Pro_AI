@@ -809,7 +809,7 @@ def populate_defense_vs_position(
         }
         for stat, mult_col in stat_to_mult.items():
             league_val = l_row[stat]
-            if league_val and league_val > 0:
+            if league_val > 0:
                 row[mult_col] = round(float(t_row[stat]) / float(league_val), 3)
             else:
                 row[mult_col] = 1.0
