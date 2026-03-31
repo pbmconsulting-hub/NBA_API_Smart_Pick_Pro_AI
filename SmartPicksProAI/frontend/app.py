@@ -4,8 +4,8 @@ app.py
 Streamlit dashboard for SmartPicksProAI.
 
 A dark, sleek, high-density "FinTech terminal" interface for viewing NBA
-matchups, analysing player performance, and triggering on-demand data
-refreshes.
+matchups, analysing player performance, browsing team rosters, and
+triggering on-demand data refreshes.
 
 Start the dashboard::
 
@@ -16,7 +16,18 @@ Start the dashboard::
 import pandas as pd
 import streamlit as st
 
-from api_service import get_player_last5, get_todays_games, trigger_refresh
+from typing import Optional
+
+from api_service import (
+    get_defense_vs_position,
+    get_player_last5,
+    get_team_roster,
+    get_team_stats,
+    get_teams,
+    get_todays_games,
+    search_players,
+    trigger_refresh,
+)
 
 # ---------------------------------------------------------------------------
 # Page configuration — must be the very first Streamlit command
@@ -80,7 +91,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Sidebar — Admin Controls
+# Sidebar — Admin Controls + Team Browser
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
@@ -95,8 +106,42 @@ with st.sidebar:
             # Bust cached GET results so the UI reloads fresh data.
             get_todays_games.clear()
             get_player_last5.clear()
+            search_players.clear()
+            get_teams.clear()
+            get_team_roster.clear()
+            get_team_stats.clear()
+            get_defense_vs_position.clear()
         else:
             st.error(f"Refresh failed: {result.get('message', 'Unknown error')}")
+
+    st.divider()
+
+    # --- Team Browser ---
+    st.header("🏟️ Team Browser")
+    teams = get_teams()
+    if teams:
+        team_labels = {t["team_id"]: f"{t['abbreviation']} — {t['team_name']}" for t in teams}
+        selected_team_id = st.selectbox(
+            "Select a team",
+            options=list(team_labels.keys()),
+            format_func=lambda tid: team_labels[tid],
+        )
+        if selected_team_id:
+            roster = get_team_roster(selected_team_id)
+            if roster:
+                st.caption(f"**Roster** ({len(roster)} players)")
+                for p in roster:
+                    pos = p.get("position") or ""
+                    label = f"{p.get('full_name', '')}  {f'({pos})' if pos else ''}"
+                    st.markdown(
+                        f"<span style='color:#c9d1d9;font-size:0.85rem;'>"
+                        f"• {label}</span>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.info("No roster data yet — run initial_pull.py to seed.")
+    else:
+        st.info("No teams loaded yet.")
 
     st.divider()
     st.caption("SmartPicksProAI v1.0 — local MVP")
@@ -120,6 +165,13 @@ if games:
     cols = st.columns(min(len(games), 4))
     for idx, game in enumerate(games):
         with cols[idx % len(cols)]:
+            score_line = ""
+            if game.get("home_score") is not None and game.get("away_score") is not None:
+                score_line = (
+                    f'<span style="color:#c9d1d9;font-size:0.85rem;">'
+                    f'{game.get("home_score", "")} – {game.get("away_score", "")}'
+                    f'</span><br>'
+                )
             st.markdown(
                 f"""
                 <div style="
@@ -133,6 +185,7 @@ if games:
                     <span style="color:#58a6ff;font-weight:600;">
                         {game.get("matchup", "TBD")}
                     </span><br>
+                    {score_line}
                     <span style="color:#8b949e;font-size:0.75rem;">
                         {game.get("game_id", "")}
                     </span>
@@ -146,22 +199,54 @@ else:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Section 2 — Player Card Modal (lookup)
+# Section 2 — Player Performance Card (search by name or ID)
 # ---------------------------------------------------------------------------
 
 st.subheader("🔍 Player Performance Card")
-st.caption("Enter an NBA player ID to view their last 5 game logs and averages.")
+st.caption("Search for an NBA player by name, or enter a player ID directly.")
 
-player_id_input = st.number_input(
-    "Player ID",
-    min_value=1,
-    value=2544,
-    step=1,
-    help="e.g. 2544 = LeBron James, 201939 = Stephen Curry",
-)
+search_col, id_col = st.columns([3, 1])
 
-if st.button("Load Player Card"):
-    data = get_player_last5(int(player_id_input))
+with search_col:
+    player_query = st.text_input(
+        "Search by name",
+        placeholder="e.g. LeBron, Curry, Jokic …",
+    )
+with id_col:
+    player_id_direct = st.number_input(
+        "Or enter ID",
+        min_value=0,
+        value=0,
+        step=1,
+        help="e.g. 2544 = LeBron James, 201939 = Stephen Curry",
+    )
+
+# Resolve which player_id to display.
+selected_player_id: Optional[int] = None
+
+if player_query.strip():
+    results = search_players(player_query.strip())
+    if results:
+        options = {
+            r["player_id"]: (
+                f"{r.get('full_name', '')}  "
+                f"({r.get('team_abbreviation', '')}"
+                f"{', ' + r['position'] if r.get('position') else ''})"
+            )
+            for r in results
+        }
+        selected_player_id = st.selectbox(
+            "Select a player",
+            options=list(options.keys()),
+            format_func=lambda pid: options[pid],
+        )
+    else:
+        st.warning("No players found matching your search.")
+elif player_id_direct > 0:
+    selected_player_id = player_id_direct
+
+if selected_player_id and st.button("Load Player Card"):
+    data = get_player_last5(int(selected_player_id))
 
     if not data:
         st.warning("Player not found or backend is unavailable.")
@@ -191,7 +276,12 @@ if st.button("Load Player Card"):
             df = pd.DataFrame(game_logs)
             display_cols = [
                 c
-                for c in ["game_date", "pts", "reb", "ast", "blk", "stl", "tov", "min"]
+                for c in [
+                    "game_date", "matchup", "wl", "pts", "reb", "ast", "blk",
+                    "stl", "tov", "fgm", "fga", "fg_pct", "fg3m", "fg3a",
+                    "fg3_pct", "ftm", "fta", "ft_pct", "oreb", "dreb", "pf",
+                    "plus_minus", "min",
+                ]
                 if c in df.columns
             ]
             st.dataframe(

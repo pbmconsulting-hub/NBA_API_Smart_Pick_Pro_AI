@@ -19,10 +19,12 @@ import logging
 import sqlite3
 import time
 from datetime import date, datetime, timedelta
+from typing import Optional
 
 import pandas as pd
 from nba_api.stats.endpoints import LeagueGameLog
 
+import initial_pull
 import setup_db
 
 logging.basicConfig(
@@ -37,13 +39,50 @@ SEASON = "2025-26"
 # NBA API date format for the date_from_nullable / date_to_nullable params.
 _NBA_DATE_FMT = "%m/%d/%Y"
 
+# Mapping from NBA API column names to Player_Game_Logs DB column names.
+STAT_COLS_MAP = {
+    "PLAYER_ID": "player_id",
+    "GAME_ID":   "game_id",
+    "WL":        "wl",
+    "MIN":       "min",
+    "PTS":       "pts",
+    "REB":       "reb",
+    "AST":       "ast",
+    "STL":       "stl",
+    "BLK":       "blk",
+    "TOV":       "tov",
+    "FGM":       "fgm",
+    "FGA":       "fga",
+    "FG_PCT":    "fg_pct",
+    "FG3M":      "fg3m",
+    "FG3A":      "fg3a",
+    "FG3_PCT":   "fg3_pct",
+    "FTM":       "ftm",
+    "FTA":       "fta",
+    "FT_PCT":    "ft_pct",
+    "OREB":      "oreb",
+    "DREB":      "dreb",
+    "PF":        "pf",
+    "PLUS_MINUS": "plus_minus",
+}
+
+# Integer stat columns (filled with 0 for DNP players).
+_INT_STAT_COLS = [
+    "pts", "reb", "ast", "stl", "blk", "tov",
+    "fgm", "fga", "fg3m", "fg3a", "ftm", "fta",
+    "oreb", "dreb", "pf",
+]
+
+# Float/percentage stat columns (filled with 0.0 for DNP players).
+_FLOAT_STAT_COLS = ["fg_pct", "fg3_pct", "ft_pct", "plus_minus"]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _get_last_game_date(conn: sqlite3.Connection) -> date | None:
+def _get_last_game_date(conn: sqlite3.Connection) -> Optional[date]:
     """Return the most recent ``game_date`` stored in the Games table.
 
     Args:
@@ -91,6 +130,38 @@ def _fetch_logs_for_range(date_from: date, date_to: date) -> pd.DataFrame:
     return df
 
 
+def _fetch_team_logs_for_range(date_from: date, date_to: date) -> pd.DataFrame:
+    """Fetch **team-level** game logs between *date_from* and *date_to*.
+
+    Mirrors :func:`_fetch_logs_for_range` but with
+    ``player_or_team_abbreviation='T'``.
+
+    Args:
+        date_from: Start date (inclusive).
+        date_to:   End date (inclusive).
+
+    Returns:
+        Raw DataFrame of team-level game logs.
+    """
+    str_from = date_from.strftime(_NBA_DATE_FMT)
+    str_to = date_to.strftime(_NBA_DATE_FMT)
+    logger.info(
+        "Fetching team logs from %s to %s …", str_from, str_to
+    )
+
+    endpoint = LeagueGameLog(
+        player_or_team_abbreviation="T",
+        season=SEASON,
+        season_type_all_star="Regular Season",
+        date_from_nullable=str_from,
+        date_to_nullable=str_to,
+    )
+    time.sleep(2)  # Respect NBA API rate limits.
+    df = endpoint.get_data_frames()[0]
+    logger.info("Team-level API returned %d rows.", len(df))
+    return df
+
+
 def _parse_game_date(series: pd.Series) -> pd.Series:
     """Convert a Series of NBA-formatted date strings to ``YYYY-MM-DD``.
 
@@ -112,28 +183,50 @@ def _parse_game_date(series: pd.Series) -> pd.Series:
 
 
 def _upsert_players(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
-    """Insert any players from *raw* that are not already in the Players table.
+    """Insert or update players from *raw* in the Players table.
+
+    Uses INSERT OR REPLACE so that rows whose ``team_id`` or
+    ``team_abbreviation`` has changed (e.g. due to a trade) are updated in
+    place.
 
     Args:
         raw: Raw game-log DataFrame.
         conn: Open SQLite connection.
     """
-    players = raw[["PLAYER_ID", "PLAYER_NAME", "TEAM_ID"]].drop_duplicates("PLAYER_ID").copy()
-    name_parts = players["PLAYER_NAME"].str.split(" ", n=1, expand=True)
-    players["first_name"] = name_parts[0].str.strip()
-    players["last_name"] = name_parts[1].str.strip() if 1 in name_parts.columns else ""
-    players = players.rename(columns={"PLAYER_ID": "player_id", "TEAM_ID": "team_id"})
-    players = players[["player_id", "first_name", "last_name", "team_id"]]
+    raw_subset = raw[["PLAYER_ID", "PLAYER_NAME", "TEAM_ID", "TEAM_ABBREVIATION"]].drop_duplicates("PLAYER_ID").copy()
+    name_parts = raw_subset["PLAYER_NAME"].str.split(" ", n=1, expand=True)
+    raw_subset["first_name"] = name_parts[0].str.strip()
+    raw_subset["last_name"] = name_parts[1].str.strip() if 1 in name_parts.columns else ""
+    raw_subset = raw_subset.rename(columns={"PLAYER_ID": "player_id", "TEAM_ID": "team_id"})
+    raw_subset["full_name"] = raw_subset["PLAYER_NAME"]
+    raw_subset["team_abbreviation"] = raw_subset["TEAM_ABBREVIATION"]
+    raw_subset["position"] = None
+    raw_subset["is_active"] = 1
+    players = raw_subset[
+        ["player_id", "first_name", "last_name", "full_name",
+         "team_id", "team_abbreviation", "position", "is_active"]
+    ]
 
-    existing = pd.read_sql("SELECT player_id FROM Players", conn)
-    new_rows = players[~players["player_id"].isin(existing["player_id"])]
-    if not new_rows.empty:
-        new_rows.to_sql("Players", conn, if_exists="append", index=False)
-        logger.info("Players: inserted %d new rows.", len(new_rows))
+    cursor = conn.cursor()
+    cols = list(players.columns)
+    placeholders = ", ".join("?" for _ in cols)
+    col_names = ", ".join(cols)
+    sql = f"INSERT OR REPLACE INTO Players ({col_names}) VALUES ({placeholders})"
+    cursor.executemany(sql, players.itertuples(index=False, name=None))
+    if len(players):
+        logger.info("Players: upserted %d rows.", len(players))
 
 
 def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
     """Insert any games from *raw* that are not already in the Games table.
+
+    Parses ``home_abbrev`` and ``away_abbrev`` from the MATCHUP string:
+
+    - ``'LAL vs. BOS'`` → home is left abbreviation (``LAL``).
+    - ``'LAL @ BOS'``   → home is right abbreviation (``BOS``).
+
+    ``home_team_id`` and ``away_team_id`` are derived from the MATCHUP and
+    TEAM_ID columns in the raw data.
 
     Args:
         raw: Raw game-log DataFrame.
@@ -145,6 +238,46 @@ def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
         columns={"GAME_ID": "game_id", "GAME_DATE": "game_date", "MATCHUP": "matchup"}
     )
 
+    games["season"] = SEASON
+
+    def _parse_abbrevs(matchup: str):
+        if " vs. " in matchup:
+            parts = matchup.split(" vs. ", 1)
+            return parts[0].strip(), parts[1].strip()
+        if " @ " in matchup:
+            parts = matchup.split(" @ ", 1)
+            return parts[1].strip(), parts[0].strip()
+        return None, None
+
+    if not games.empty:
+        home_abbrevs, away_abbrevs = zip(*games["matchup"].map(_parse_abbrevs))
+        games["home_abbrev"] = list(home_abbrevs)
+        games["away_abbrev"] = list(away_abbrevs)
+        # Normalise matchup to always use "{HOME} vs. {AWAY}" format.
+        games["matchup"] = games["home_abbrev"] + " vs. " + games["away_abbrev"]
+    else:
+        games["home_abbrev"] = []
+        games["away_abbrev"] = []
+
+    # Derive home_team_id / away_team_id from the raw per-player rows.
+    home_ids = (
+        raw.loc[raw["MATCHUP"].str.contains(" vs. ", na=False), ["GAME_ID", "TEAM_ID"]]
+        .drop_duplicates("GAME_ID")
+        .rename(columns={"GAME_ID": "game_id", "TEAM_ID": "home_team_id"})
+    )
+    away_ids = (
+        raw.loc[raw["MATCHUP"].str.contains(" @ ", na=False), ["GAME_ID", "TEAM_ID"]]
+        .drop_duplicates("GAME_ID")
+        .rename(columns={"GAME_ID": "game_id", "TEAM_ID": "away_team_id"})
+    )
+    games = games.merge(home_ids, on="game_id", how="left")
+    games = games.merge(away_ids, on="game_id", how="left")
+
+    games = games[
+        ["game_id", "game_date", "season", "home_team_id", "away_team_id",
+         "home_abbrev", "away_abbrev", "matchup"]
+    ]
+
     existing = pd.read_sql("SELECT game_id FROM Games", conn)
     new_rows = games[~games["game_id"].isin(existing["game_id"])]
     if not new_rows.empty:
@@ -155,9 +288,12 @@ def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
 def _upsert_logs(raw: pd.DataFrame, conn: sqlite3.Connection) -> int:
     """Insert new player-game log rows that are not already in the database.
 
+    Captures the full set of stat columns defined in :data:`STAT_COLS_MAP`.
+
     **DNP handling:** Players who did not play (0 minutes, null/None stats)
-    have their numeric stat columns set to ``0`` and ``min`` set to
-    ``'0:00'`` so downstream ML math never encounters NaN values.
+    have their integer stat columns set to ``0``, float/percentage columns set
+    to ``0.0``, and ``min`` set to ``'0:00'`` so downstream ML math never
+    encounters NaN values.
 
     Args:
         raw: Raw game-log DataFrame.
@@ -166,26 +302,24 @@ def _upsert_logs(raw: pd.DataFrame, conn: sqlite3.Connection) -> int:
     Returns:
         Number of new rows inserted into ``Player_Game_Logs``.
     """
-    logs = raw[["PLAYER_ID", "GAME_ID", "PTS", "REB", "AST", "BLK", "STL", "TOV", "MIN"]].copy()
-    logs = logs.rename(
-        columns={
-            "PLAYER_ID": "player_id",
-            "GAME_ID": "game_id",
-            "PTS": "pts",
-            "REB": "reb",
-            "AST": "ast",
-            "BLK": "blk",
-            "STL": "stl",
-            "TOV": "tov",
-            "MIN": "min",
-        }
-    )
+    available_cols = [c for c in STAT_COLS_MAP if c in raw.columns]
+    logs = raw[available_cols].copy()
+    logs = logs.rename(columns={k: v for k, v in STAT_COLS_MAP.items() if k in available_cols})
+
+    # Deduplicate on the composite PK as a safety net — the NBA API should
+    # return exactly one row per player-game, but duplicates have been
+    # observed when raw data is merged from multiple partial fetches.
+    logs = logs.drop_duplicates(subset=["player_id", "game_id"])
 
     # --- DNP / inactive edge-case handling ---
-    stat_cols = ["pts", "reb", "ast", "blk", "stl", "tov"]
-    for col in stat_cols:
-        logs[col] = pd.to_numeric(logs[col], errors="coerce").fillna(0).astype(int)
-    logs["min"] = logs["min"].fillna("0:00").replace("", "0:00")
+    for col in _INT_STAT_COLS:
+        if col in logs.columns:
+            logs[col] = pd.to_numeric(logs[col], errors="coerce").fillna(0).astype(int)
+    for col in _FLOAT_STAT_COLS:
+        if col in logs.columns:
+            logs[col] = pd.to_numeric(logs[col], errors="coerce").fillna(0.0)
+    if "min" in logs.columns:
+        logs["min"] = logs["min"].fillna("0:00").replace("", "0:00")
 
     existing = pd.read_sql("SELECT player_id, game_id FROM Player_Game_Logs", conn)
     if existing.empty:
@@ -201,6 +335,26 @@ def _upsert_logs(raw: pd.DataFrame, conn: sqlite3.Connection) -> int:
     new_rows.to_sql("Player_Game_Logs", conn, if_exists="append", index=False)
     logger.info("Player_Game_Logs: inserted %d new rows.", len(new_rows))
     return len(new_rows)
+
+
+def _upsert_team_game_stats(
+    raw_team: pd.DataFrame, conn: sqlite3.Connection
+) -> None:
+    """Insert new Team_Game_Stats rows from team-level game log data.
+
+    Delegates to :func:`initial_pull.build_team_game_stats_df` and
+    :func:`initial_pull.load_team_game_stats` to reuse the shared transform
+    and load logic.
+
+    Args:
+        raw_team: Raw team-level game-log DataFrame.
+        conn: Open SQLite connection.
+    """
+    if raw_team.empty:
+        logger.info("Team_Game_Stats: no team data to process.")
+        return
+    stats = initial_pull.build_team_game_stats_df(raw_team)
+    initial_pull.load_team_game_stats(stats, conn)
 
 
 # ---------------------------------------------------------------------------
@@ -219,12 +373,13 @@ def run_update(db_path: str = DB_PATH) -> int:
        0 (run ``initial_pull.py`` first).
     3. Fetches all player game logs between ``last_date + 1 day`` and
        yesterday using the NBA API.
-    4. De-duplicates and appends new rows to all three tables.
+    4. De-duplicates and appends new rows to Players, Games,
+       Player_Game_Logs, and Team_Game_Stats.
     5. Returns the total count of new ``Player_Game_Logs`` rows inserted.
 
     There are **no loops, no scheduling, and no ``while True`` blocks**.
-    A single ``time.sleep(2)`` is called inside :func:`_fetch_logs_for_range`
-    after each API request.
+    A single ``time.sleep(2)`` is called inside each fetch helper after
+    every API request.
 
     Args:
         db_path: Path to the SQLite database file.
@@ -266,6 +421,20 @@ def run_update(db_path: str = DB_PATH) -> int:
         _upsert_players(raw, conn)
         _upsert_games(raw, conn)
         new_log_count = _upsert_logs(raw, conn)
+
+        # Also update Team_Game_Stats from team-level logs.
+        raw_team = _fetch_team_logs_for_range(date_from, yesterday)
+        _upsert_team_game_stats(raw_team, conn)
+
+        # Back-fill home/away scores from Team_Game_Stats into Games.
+        initial_pull.populate_game_scores(conn)
+
+        # Refresh season-level pace/ortg/drtg on the Teams table.
+        initial_pull.update_team_season_stats(conn)
+
+        # Refresh Defense_Vs_Position multipliers.
+        initial_pull.populate_defense_vs_position(conn, SEASON)
+
         conn.commit()
         logger.info(
             "=== Update complete. %d new log records added. ===", new_log_count
