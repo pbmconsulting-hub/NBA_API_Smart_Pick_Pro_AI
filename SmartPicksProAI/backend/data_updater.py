@@ -391,6 +391,9 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
         logger.info("ScoreboardV3 returned no games for %s.", today_str)
         return 0
 
+    # Pre-convert gameId column to string once to avoid repeated conversions.
+    line_score_game_ids = line_score["gameId"].astype(str)
+
     inserted = 0
     cursor = conn.cursor()
     for _, game_row in game_header.iterrows():
@@ -406,7 +409,7 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
             continue
 
         # LineScore has 2 rows per game: away team first, home team second.
-        teams = line_score[line_score["gameId"].astype(str) == game_id]
+        teams = line_score[line_score_game_ids == game_id]
         if len(teams) >= 2:
             away_tri = teams.iloc[0].get("teamTricode", "")
             home_tri = teams.iloc[1].get("teamTricode", "")
