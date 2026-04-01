@@ -498,6 +498,9 @@ def get_defense_vs_position(team_abbreviation: str) -> dict:
     the team allows more than average (weaker defense); **< 1.0** means
     tougher defense.
 
+    Positions use a **5-position** model: ``PG``, ``SG``, ``SF``, ``PF``,
+    ``C``.
+
     Args:
         team_abbreviation: Three-letter team code (e.g. ``'BOS'``).
 
@@ -508,7 +511,7 @@ def get_defense_vs_position(team_abbreviation: str) -> dict:
               "team_abbreviation": "BOS",
               "positions": [
                 {
-                  "pos": "G",
+                  "pos": "PG",
                   "vs_pts_mult": 0.95,
                   "vs_reb_mult": 1.02,
                   "vs_ast_mult": 0.98,
