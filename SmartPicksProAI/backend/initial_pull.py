@@ -601,16 +601,21 @@ def _parse_height_inches(height_str: str) -> float | None:
         parts = height_str.replace("'", "-").replace('"', "").split("-")
         feet = int(parts[0])
         inches = int(parts[1]) if len(parts) > 1 else 0
+        if not (5 <= feet <= 8) or not (0 <= inches <= 11):
+            return None
         return float(feet * 12 + inches)
     except (ValueError, IndexError):
         return None
 
 
-# Height thresholds used to split generic positions into 5-position values.
-_GUARD_CUTOFF = 76.0    # ≤ 6'4" → PG, > 6'4" → SG
-_FORWARD_CUTOFF = 80.0  # ≤ 6'8" → SF, > 6'8" → PF
-_TWEENER_GF = 78.0      # Guard-Forward split: ≤ 6'6" → SG, else SF
-_TWEENER_FC = 81.0      # Forward-Center split: ≤ 6'9" → PF, else C
+# Height thresholds (in inches) for splitting generic roster positions into
+# the standard 5-position model.  Based on typical NBA position height
+# distributions: PG averages ~6'2", SG ~6'4", SF ~6'7", PF ~6'9", C ~6'11".
+# Cutoffs are set at the midpoint between adjacent position averages.
+_PG_SG_CUTOFF = 76.0    # ≤ 6'4" → PG, > 6'4" → SG
+_SF_PF_CUTOFF = 80.0    # ≤ 6'8" → SF, > 6'8" → PF
+_GUARD_FWD_CUTOFF = 78.0  # Guard-Forward split: ≤ 6'6" → SG, else SF
+_FWD_CTR_CUTOFF = 81.0    # Forward-Center split: ≤ 6'9" → PF, else C
 
 
 def _map_to_five_position(
@@ -630,22 +635,22 @@ def _map_to_five_position(
 
     if p in ("G",):
         if h is not None:
-            return "PG" if h <= _GUARD_CUTOFF else "SG"
+            return "PG" if h <= _PG_SG_CUTOFF else "SG"
         return "SG"  # default guard → SG
     if p in ("F",):
         if h is not None:
-            return "SF" if h <= _FORWARD_CUTOFF else "PF"
+            return "SF" if h <= _SF_PF_CUTOFF else "PF"
         return "SF"  # default forward → SF
     if p in ("C",):
         return "C"
     # Compound positions
     if p in ("G-F", "F-G"):
         if h is not None:
-            return "SG" if h <= _TWEENER_GF else "SF"
+            return "SG" if h <= _GUARD_FWD_CUTOFF else "SF"
         return "SF"  # default tweener → SF
     if p in ("F-C", "C-F"):
         if h is not None:
-            return "PF" if h <= _TWEENER_FC else "C"
+            return "PF" if h <= _FWD_CTR_CUTOFF else "C"
         return "PF"  # default big tweener → PF
     # Already a 5-position value?
     if p in ("PG", "SG", "SF", "PF"):
