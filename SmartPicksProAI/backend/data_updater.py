@@ -390,9 +390,9 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
     try:
         def _fetch_scoreboard():
             sb = ScoreboardV3(game_date=today_str)
-            time.sleep(2)  # Respect NBA API rate limits.
             return sb.game_header.get_data_frame(), sb.line_score.get_data_frame()
 
+        time.sleep(2)  # Respect NBA API rate limits.
         game_header, line_score = initial_pull._call_with_retries(
             _fetch_scoreboard,
             description=f"ScoreboardV3({today_str})",

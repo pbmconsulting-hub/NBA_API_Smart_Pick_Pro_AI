@@ -146,7 +146,7 @@ def _call_with_retries(api_callable, description="API call", max_retries=_MAX_RE
         except Exception as exc:
             last_exc = exc
             if attempt < max_retries:
-                delay = 2 * attempt  # exponential back-off: 2 s, 4 s
+                delay = 2 * attempt  # linear back-off: 2 s, 4 s
                 logger.warning(
                     "%s failed (attempt %d/%d): %s — retrying in %ds …",
                     description, attempt, max_retries, exc, delay,
