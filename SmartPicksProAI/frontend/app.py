@@ -1296,13 +1296,13 @@ elif current_page == "team_detail":
 
         with t_tab_dvp:
             if abbrev:
-                st.caption(
-                    f"How **{abbrev}** defends each position. "
-                    "Multiplier > 1.0 = weaker defense (allows more than avg). "
-                    "< 1.0 = tougher defense (allows less than avg)."
-                )
                 dvp = get_defense_vs_position(abbrev)
                 if dvp:
+                    st.caption(
+                        f"How **{abbrev}** defends each position. "
+                        "Multiplier > 1.0 = weaker defense (allows more than avg). "
+                        "< 1.0 = tougher defense (allows less than avg)."
+                    )
                     _show_df(dvp, [
                         "pos", "vs_pts_mult", "vs_reb_mult",
                         "vs_ast_mult", "vs_stl_mult", "vs_blk_mult",
@@ -1498,9 +1498,10 @@ Boston.
                         ("vs_ast_mult", "Assists"),
                         ("vs_3pm_mult", "3-Pointers"),
                     ]:
-                        if stat in df_dvp.columns:
-                            best = df_dvp.loc[df_dvp[stat].idxmax()]
-                            worst = df_dvp.loc[df_dvp[stat].idxmin()]
+                        if stat in df_dvp.columns and df_dvp[stat].notna().any():
+                            valid = df_dvp[df_dvp[stat].notna()]
+                            best = valid.loc[valid[stat].idxmax()]
+                            worst = valid.loc[valid[stat].idxmin()]
                             c1, c2 = st.columns(2)
                             c1.metric(
                                 f"🟢 Easiest for {label}",
