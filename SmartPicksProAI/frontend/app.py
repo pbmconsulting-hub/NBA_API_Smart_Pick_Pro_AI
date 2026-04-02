@@ -656,6 +656,11 @@ elif current_page == "game_detail":
             if home_team or away_team:
                 st.markdown('<div class="section-hdr">Team Comparison</div>',
                             unsafe_allow_html=True)
+                st.caption(
+                    "**Pace** = possessions per game (higher = faster).  "
+                    "**ORtg** = points scored per 100 possessions (higher = better offense).  "
+                    "**DRtg** = points allowed per 100 possessions (lower = better defense)."
+                )
                 c1, c2 = st.columns(2)
                 with c1:
                     ht_name = home_team.get("team_name", home_abbrev)
@@ -885,6 +890,7 @@ elif current_page == "player_profile":
                 st.info("No recent game data.")
 
         with p_t_career:
+            st.caption("Season-by-season totals across the player's entire NBA career.")
             career = get_player_career(pid)
             if career:
                 _show_df(career, [
@@ -898,6 +904,22 @@ elif current_page == "player_profile":
                 st.info("No career data.")
 
         with p_t_adv:
+            with st.expander("ℹ️ What do advanced stats mean?", expanded=False):
+                st.markdown("""
+| Stat | Meaning |
+|------|---------|
+| **ORtg** | Offensive Rating — points produced per 100 possessions |
+| **DRtg** | Defensive Rating — points allowed per 100 possessions (lower = better) |
+| **Net Rtg** | ORtg − DRtg; positive = outscoring opponents while on court |
+| **TS%** | True Shooting % — shooting efficiency including FT and 3PT |
+| **eFG%** | Effective FG% — adjusts for 3PT being worth more |
+| **USG%** | Usage Rate — % of team possessions used while on court |
+| **AST%** | Assist % — % of teammate FGs assisted while on court |
+| **TOV Ratio** | Turnovers per 100 possessions |
+| **OREB% / DREB%** | Offensive / Defensive rebound % |
+| **Pace** | Possessions per 48 minutes |
+| **PIE** | Player Impact Estimate — overall contribution (higher = better) |
+                """)
             adv = get_player_advanced(pid)
             if adv:
                 _show_df(adv, [
@@ -910,6 +932,7 @@ elif current_page == "player_profile":
                 st.info("No advanced data.")
 
         with p_t_scoring:
+            st.caption("How this player's points are distributed — 2PT vs 3PT, paint vs midrange, assisted vs unassisted.")
             scoring = get_player_scoring(pid)
             if scoring:
                 _show_df(scoring, [
@@ -923,6 +946,7 @@ elif current_page == "player_profile":
                 st.info("No scoring data.")
 
         with p_t_usage:
+            st.caption("Usage shows what % of the team's actions this player is responsible for while on the court.")
             usage = get_player_usage(pid)
             if usage:
                 _show_df(usage, [
@@ -936,6 +960,7 @@ elif current_page == "player_profile":
                 st.info("No usage data.")
 
         with p_t_shots:
+            st.caption("Every field goal attempt plotted by court location, zone, and distance.")
             shots = get_player_shot_chart(pid)
             if shots:
                 df_shots = pd.DataFrame(shots)
@@ -970,6 +995,7 @@ elif current_page == "player_profile":
                 st.info("No shot chart data.")
 
         with p_t_tracking:
+            st.caption("Player-tracking data from NBA cameras — speed, distance, touches, and shot contest rates.")
             tracking = get_player_tracking(pid)
             if tracking:
                 _show_df(tracking, [
@@ -986,6 +1012,7 @@ elif current_page == "player_profile":
                 st.info("No tracking data.")
 
         with p_t_clutch:
+            st.caption("Performance in clutch time — the last 5 minutes when the score is within 5 points.")
             clutch = get_player_clutch(pid)
             if clutch:
                 _show_df(clutch, [
@@ -997,6 +1024,7 @@ elif current_page == "player_profile":
                 st.info("No clutch data.")
 
         with p_t_hustle:
+            st.caption("Effort plays that don't show up in traditional stats — deflections, loose balls, contested shots, screens.")
             hustle = get_player_hustle(pid)
             if hustle:
                 _show_df(hustle, [
@@ -1010,6 +1038,7 @@ elif current_page == "player_profile":
                 st.info("No hustle data.")
 
         with p_t_matchups:
+            st.caption("Head-to-head defensive matchup data — who guarded this player and how they performed.")
             matchups = get_player_matchups(pid)
             if matchups:
                 _show_df(matchups, [
@@ -1024,6 +1053,7 @@ elif current_page == "player_profile":
                 st.info("No matchup data.")
 
         with p_t_awards:
+            st.caption("Career accolades — All-Star selections, All-NBA teams, Player of the Week/Month, and more.")
             awards = get_player_awards(pid)
             if awards:
                 _show_df(awards, [
@@ -1040,6 +1070,26 @@ elif current_page == "player_profile":
 
 elif current_page == "standings":
     st.title("🏆 League Standings")
+
+    with st.expander("ℹ️ Understanding League Standings", expanded=False):
+        st.markdown("""
+**League Standings** show how every NBA team ranks in their conference.
+The top 6 teams in each conference automatically qualify for the playoffs,
+while seeds 7–10 compete in the **Play-In Tournament**.
+
+| Column | Meaning |
+|--------|---------|
+| **Playoff Rank** | Team's seed in their conference (1 = best) |
+| **W / L** | Wins and losses |
+| **Win%** | Win percentage — wins ÷ total games played |
+| **Home / Road** | Record at home vs. on the road (e.g. "25-5") |
+| **L10** | Record over the last 10 games — shows recent form |
+| **Streak** | Current winning or losing streak (e.g. "W3" = 3 straight wins) |
+| **GB** | Games Back — how many games behind the conference leader |
+| **PPG** | Points Per Game scored |
+| **Opp PPG** | Opponent Points Per Game — points allowed |
+| **Diff** | Point differential (PPG − Opp PPG); positive = outscoring opponents |
+        """)
 
     standings_data = get_standings()
     if standings_data:
@@ -1066,6 +1116,7 @@ elif current_page == "standings":
 
         st.divider()
         st.markdown("### 📋 Full Standings Detail")
+        st.caption("Scroll right to see all columns including division records and vs-conference breakdowns.")
         _show_df(standings_data, height=500)
     else:
         st.info("No standings data available. Run a data sync to populate.")
@@ -1080,7 +1131,7 @@ elif current_page == "teams_browse":
 
     all_teams = get_teams()
     if all_teams:
-        st.caption("Select a team to view details, roster, stats, and more.")
+        st.caption("Select a team to view their roster, game stats, clutch/hustle metrics, synergy play types, and defense vs position.")
         # Group by conference
         east_teams = [t for t in all_teams if t.get("conference") == "East"]
         west_teams = [t for t in all_teams if t.get("conference") == "West"]
@@ -1195,6 +1246,7 @@ elif current_page == "team_detail":
                 st.info("No team details.")
 
         with t_tab_synergy:
+            st.caption("Play-type efficiency — how well the team runs each offensive action (PPP = Points Per Possession).")
             synergy = get_team_synergy(tid)
             if synergy:
                 _show_df(synergy, [
@@ -1207,6 +1259,7 @@ elif current_page == "team_detail":
                 st.info("No synergy data.")
 
         with t_tab_clutch:
+            st.caption("Team performance in clutch time — last 5 min when score is within 5 points.")
             t_clutch = get_team_clutch(tid)
             if t_clutch:
                 _show_df(t_clutch, [
@@ -1218,6 +1271,7 @@ elif current_page == "team_detail":
                 st.info("No clutch data.")
 
         with t_tab_hustle:
+            st.caption("Effort metrics — deflections, contested shots, loose balls recovered, box-outs.")
             t_hustle = get_team_hustle(tid)
             if t_hustle:
                 _show_df(t_hustle, [
@@ -1229,6 +1283,7 @@ elif current_page == "team_detail":
                 st.info("No hustle data.")
 
         with t_tab_metrics:
+            st.caption("NBA's estimated advanced metrics — ORtg, DRtg, Net Rtg, Pace derived from league-wide tracking data.")
             t_metrics = get_team_estimated_metrics(tid)
             if t_metrics:
                 _show_df(t_metrics, [
@@ -1244,8 +1299,9 @@ elif current_page == "team_detail":
                 dvp = get_defense_vs_position(abbrev)
                 if dvp:
                     st.caption(
-                        "Multiplier > 1.0 = weaker defense (allows more). "
-                        "< 1.0 = tougher defense."
+                        f"How **{abbrev}** defends each position. "
+                        "Multiplier > 1.0 = weaker defense (allows more than avg). "
+                        "< 1.0 = tougher defense (allows less than avg)."
                     )
                     _show_df(dvp, [
                         "pos", "vs_pts_mult", "vs_reb_mult",
@@ -1263,6 +1319,34 @@ elif current_page == "team_detail":
 elif current_page == "leaders":
     st.title("📊 League Leaders & Season Stats")
 
+    with st.expander("ℹ️ Understanding Leaders & Stats", expanded=False):
+        st.markdown("""
+This section gives you three views into NBA performance:
+
+**🏅 League Leaders** — The top players ranked by overall efficiency.
+The "EFF" (Efficiency) rating is a simple formula:
+`(PTS + REB + AST + STL + BLK) − (Missed FG + Missed FT + TOV)`.
+Higher = better overall production.
+
+**👤 Season Player Stats** — Per-game averages for every player this season.
+Use this to compare any two players head-to-head across all box-score stats.
+
+**🏟️ Season Team Stats** — Per-game averages for every team this season.
+Great for spotting the best offensive teams (high PTS), defensive teams
+(low Opp PTS), or efficient shooting teams (high FG%).
+
+| Key Stat | Meaning |
+|----------|---------|
+| **GP** | Games played |
+| **MIN** | Minutes per game |
+| **FG%** | Field goal percentage — overall shooting accuracy |
+| **FG3%** | Three-point percentage |
+| **FT%** | Free throw percentage |
+| **+/−** | Plus-minus — team's net score while this player is on court |
+| **Fantasy PTS** | NBA Fantasy points (standard scoring) |
+| **DD2 / TD3** | Double-doubles / Triple-doubles this season |
+        """)
+
     l_tab_leaders, l_tab_players, l_tab_teams = st.tabs([
         "🏅 League Leaders",
         "👤 Season Player Stats",
@@ -1270,6 +1354,7 @@ elif current_page == "leaders":
     ])
 
     with l_tab_leaders:
+        st.caption("Top players ranked by efficiency. Click any name to open their full profile.")
         leaders = get_league_leaders()
         if leaders:
             _show_df(leaders, [
@@ -1292,6 +1377,10 @@ elif current_page == "leaders":
             st.info("No league leaders data.")
 
     with l_tab_players:
+        st.caption(
+            "Season per-game averages for every player. "
+            "Sort by any column header to find leaders in a specific stat."
+        )
         dash_players = get_league_dash_players()
         if dash_players:
             _show_df(dash_players, [
@@ -1304,6 +1393,10 @@ elif current_page == "leaders":
             st.info("No season player stats.")
 
     with l_tab_teams:
+        st.caption(
+            "Season per-game averages for every team. "
+            "Compare offensive and defensive performance across the league."
+        )
         dash_teams = get_league_dash_teams()
         if dash_teams:
             _show_df(dash_teams, [
@@ -1321,13 +1414,54 @@ elif current_page == "leaders":
 
 elif current_page == "defense":
     st.title("🛡️ Defense vs Position")
-    st.caption(
-        "How each team defends different positions. "
-        "Multiplier > 1.0 = allows more than average. < 1.0 = tougher."
-    )
+
+    with st.expander("ℹ️ Understanding Defense vs Position", expanded=False):
+        st.markdown("""
+**Defense vs Position (DVP)** reveals how well each team defends against
+players at each position (PG, SG, SF, PF, C).  This is one of the most
+valuable tools for **fantasy basketball**, **DFS**, and **betting props**.
+
+### How to read the multipliers
+
+Every stat gets a **multiplier** relative to the league average:
+
+| Multiplier | Meaning | Example |
+|------------|---------|---------|
+| **1.00** | League average — no advantage or disadvantage | — |
+| **> 1.00** | Team allows **more** than average (weaker defense) | 1.15 = allows 15% more |
+| **< 1.00** | Team allows **less** than average (tougher defense) | 0.85 = allows 15% less |
+
+### Stat columns explained
+
+| Column | Stat | What it tells you |
+|--------|------|-------------------|
+| **vs_pts_mult** | Points | How many points this position scores against them |
+| **vs_reb_mult** | Rebounds | How many rebounds this position grabs against them |
+| **vs_ast_mult** | Assists | How many assists this position records against them |
+| **vs_stl_mult** | Steals | How many steals this position gets against them |
+| **vs_blk_mult** | Blocks | How many blocks this position gets against them |
+| **vs_3pm_mult** | 3-Pointers Made | How many threes this position makes against them |
+
+### 💡 How to use this
+
+**Example:** If Boston has a `vs_pts_mult` of **1.20** for the **PG**
+position, that means point guards score **20% more** against Boston than the
+league average.  A PG averaging 20 PPG would be projected for ~24 PPG vs
+Boston.
+
+**Look for multipliers > 1.10** to find favourable matchups, and
+**< 0.90** to identify tough matchups to avoid.
+        """)
 
     dvp_teams = get_teams()
     if dvp_teams:
+        # ── Position filter at the top ────────────────────────
+        pos_filter = st.selectbox(
+            "Filter by position",
+            options=["All Positions", "PG", "SG", "SF", "PF", "C"],
+            key="dvp_pos_filter",
+        )
+
         selected_dvp = st.selectbox(
             "Select a team (or All Teams)",
             options=["All Teams"] + [
@@ -1335,6 +1469,12 @@ elif current_page == "defense":
             ],
             key="dvp_select",
         )
+
+        display_cols = [
+            "team", "pos", "vs_pts_mult", "vs_reb_mult",
+            "vs_ast_mult", "vs_stl_mult", "vs_blk_mult",
+            "vs_3pm_mult",
+        ]
 
         if selected_dvp == "All Teams":
             all_dvp = []
@@ -1344,21 +1484,70 @@ elif current_page == "defense":
                     p["team"] = t["abbreviation"]
                     all_dvp.append(p)
             if all_dvp:
-                _show_df(all_dvp, [
-                    "team", "pos", "vs_pts_mult", "vs_reb_mult",
-                    "vs_ast_mult", "vs_stl_mult", "vs_blk_mult",
-                    "vs_3pm_mult",
-                ], height=600)
+                df_dvp = pd.DataFrame(all_dvp)
+                if pos_filter != "All Positions":
+                    df_dvp = df_dvp[df_dvp["pos"] == pos_filter]
+
+                if not df_dvp.empty:
+                    # Summary: best & worst matchups
+                    st.markdown('<div class="section-hdr">Quick Insights</div>',
+                                unsafe_allow_html=True)
+                    for stat, label in [
+                        ("vs_pts_mult", "Points"),
+                        ("vs_reb_mult", "Rebounds"),
+                        ("vs_ast_mult", "Assists"),
+                        ("vs_3pm_mult", "3-Pointers"),
+                    ]:
+                        if stat in df_dvp.columns and df_dvp[stat].notna().any():
+                            valid = df_dvp[df_dvp[stat].notna()]
+                            best = valid.loc[valid[stat].idxmax()]
+                            worst = valid.loc[valid[stat].idxmin()]
+                            c1, c2 = st.columns(2)
+                            c1.metric(
+                                f"🟢 Easiest for {label}",
+                                f"{best['team']} vs {best['pos']}",
+                                f"{best[stat]:.2f}x",
+                            )
+                            c2.metric(
+                                f"🔴 Toughest for {label}",
+                                f"{worst['team']} vs {worst['pos']}",
+                                f"{worst[stat]:.2f}x",
+                                delta_color="inverse",
+                            )
+
+                    st.divider()
+                    st.markdown('<div class="section-hdr">Full Table</div>',
+                                unsafe_allow_html=True)
+                    st.caption(
+                        "Sort by any column to find the best/worst matchups. "
+                        "🟢 > 1.0 = weaker defense (good matchup)  ·  "
+                        "🔴 < 1.0 = tougher defense (bad matchup)"
+                    )
+                    avail_cols = [c for c in display_cols if c in df_dvp.columns]
+                    _show_df(df_dvp[avail_cols].to_dict("records"), avail_cols, height=600)
+                else:
+                    st.info("No data for the selected position.")
             else:
                 st.info("No defense-vs-position data available.")
         else:
             positions = get_defense_vs_position(selected_dvp)
             if positions:
-                _show_df(positions, [
-                    "pos", "vs_pts_mult", "vs_reb_mult",
-                    "vs_ast_mult", "vs_stl_mult", "vs_blk_mult",
-                    "vs_3pm_mult",
-                ])
+                if pos_filter != "All Positions":
+                    positions = [p for p in positions if p.get("pos") == pos_filter]
+                if positions:
+                    st.caption(
+                        f"**{selected_dvp}** defense multipliers by position. "
+                        "Values > 1.0 = allows more than average (weaker). "
+                        "Values < 1.0 = allows less (tougher)."
+                    )
+                    single_cols = [
+                        "pos", "vs_pts_mult", "vs_reb_mult",
+                        "vs_ast_mult", "vs_stl_mult", "vs_blk_mult",
+                        "vs_3pm_mult",
+                    ]
+                    _show_df(positions, single_cols)
+                else:
+                    st.info("No data for the selected position.")
             else:
                 st.info("No data for this team.")
     else:
