@@ -5,9 +5,12 @@ On-demand incremental update module for the SmartPicksProAI database.
 
 Exposes a single public function, :func:`run_update`, which fetches only the
 game logs that have occurred since the last date already stored in the
-``Games`` table.  There are **no scheduling loops, no cron jobs, and no
-``while True`` blocks** — the caller decides when to trigger an update (e.g.
-via the FastAPI endpoint in api.py).
+``Games`` table.  Also refreshes season-level dashboards and advanced box
+scores for newly added games.
+
+There are **no scheduling loops, no cron jobs, and no ``while True`` blocks**
+— the caller decides when to trigger an update (e.g. via the FastAPI
+endpoint in api.py).
 
 Usage::
 
@@ -438,6 +441,54 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
     return inserted
 
 
+def _refresh_season_dashboards(
+    conn: sqlite3.Connection, season: str,
+) -> None:
+    """Refresh all season-level dashboard tables.
+
+    This is a lightweight operation — each call is a single NBA API request
+    that returns data for all players/teams at once.
+
+    Args:
+        conn: Open SQLite connection.
+        season: NBA season string.
+    """
+    logger.info("Refreshing season-level dashboard tables …")
+    initial_pull.populate_player_clutch_stats(conn, season)
+    initial_pull.populate_team_clutch_stats(conn, season)
+    initial_pull.populate_player_hustle_stats(conn, season)
+    initial_pull.populate_team_hustle_stats(conn, season)
+    initial_pull.populate_player_bio(conn, season)
+    initial_pull.populate_player_estimated_metrics(conn, season)
+    initial_pull.populate_team_estimated_metrics(conn, season)
+    initial_pull.populate_league_dash_player_stats(conn, season)
+    initial_pull.populate_league_dash_team_stats(conn, season)
+    initial_pull.populate_league_leaders(conn, season)
+    initial_pull.populate_standings(conn, season)
+    logger.info("Season-level dashboard tables refreshed.")
+
+
+def _get_new_game_ids(
+    conn: sqlite3.Connection, date_from: "date", date_to: "date",
+) -> list[str]:
+    """Return game_ids for completed games in the given date range.
+
+    Args:
+        conn: Open SQLite connection.
+        date_from: Start date (inclusive).
+        date_to: End date (inclusive).
+
+    Returns:
+        List of game_id strings.
+    """
+    rows = conn.execute(
+        "SELECT game_id FROM Games "
+        "WHERE game_date >= ? AND game_date <= ? AND home_score IS NOT NULL",
+        (date_from.isoformat(), date_to.isoformat()),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -456,7 +507,10 @@ def run_update(db_path: str = DB_PATH) -> int:
        yesterday using the NBA API.
     4. De-duplicates and appends new rows to Players, Games,
        Player_Game_Logs, and Team_Game_Stats.
-    5. Returns the total count of new ``Player_Game_Logs`` rows inserted.
+    5. Refreshes season-level dashboards (clutch, hustle, bio, estimated
+       metrics, league dash stats, league leaders, standings).
+    6. Fetches advanced box scores for any new games.
+    7. Returns the total count of new ``Player_Game_Logs`` rows inserted.
 
     There are **no loops, no scheduling, and no ``while True`` blocks**.
     A single ``time.sleep(2)`` is called inside each fetch helper after
@@ -490,6 +544,9 @@ def run_update(db_path: str = DB_PATH) -> int:
             # Still sync today's schedule so the games/today endpoint works.
             sync_todays_games(conn)
             conn.commit()
+            # Refresh season dashboards even when no new games (standings etc change).
+            _refresh_season_dashboards(conn, SEASON)
+            conn.commit()
             return 0
 
         logger.info(
@@ -502,6 +559,8 @@ def run_update(db_path: str = DB_PATH) -> int:
             logger.info("No new game data found for the requested date range.")
             # Still sync today's schedule so the games/today endpoint works.
             sync_todays_games(conn)
+            conn.commit()
+            _refresh_season_dashboards(conn, SEASON)
             conn.commit()
             return 0
 
@@ -527,6 +586,18 @@ def run_update(db_path: str = DB_PATH) -> int:
         sync_todays_games(conn)
 
         conn.commit()
+
+        # --- Refresh season-level dashboards ---
+        _refresh_season_dashboards(conn, SEASON)
+        conn.commit()
+
+        # --- Fetch advanced box scores for new games ---
+        new_game_ids = _get_new_game_ids(conn, date_from, yesterday)
+        if new_game_ids:
+            logger.info("Fetching advanced box scores for %d new games.", len(new_game_ids))
+            initial_pull.populate_game_advanced_box_scores(conn, SEASON, new_game_ids)
+            conn.commit()
+
         logger.info(
             "=== Update complete. %d new log records added. ===", new_log_count
         )
