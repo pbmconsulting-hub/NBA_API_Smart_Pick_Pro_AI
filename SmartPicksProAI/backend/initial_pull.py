@@ -19,7 +19,9 @@ Run this script exactly once to establish the historical baseline:
 
 import logging
 import sqlite3
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 from nba_api.stats.endpoints import (
@@ -119,9 +121,28 @@ _TEAM_CONFERENCE_DIVISION: dict[str, tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 
 _MAX_RETRIES = 3
-_MAX_RETRIES_PER_PLAYER = 5          # More retries for per-player endpoints.
-_PER_PLAYER_TIMEOUT = 60             # Seconds — higher for slow per-player calls.
-_PER_GAME_TIMEOUT = 60               # Seconds — higher for per-game box-score calls.
+_MAX_RETRIES_PER_PLAYER = 3          # Retries for per-player endpoints.
+_PER_PLAYER_TIMEOUT = 30             # Seconds for per-player calls.
+_PER_GAME_TIMEOUT = 30               # Seconds for per-game box-score calls.
+_RATE_LIMIT_DELAY = 0.6              # Seconds between API calls (rate-limit).
+_PLAYER_WORKERS = 3                  # Concurrent threads for per-player fetches.
+_GAME_WORKERS = 3                    # Concurrent threads for per-game fetches.
+_BOX_SCORE_TYPE_WORKERS = 5          # Concurrent threads for box-score types within one game.
+
+# Thread-safe rate limiter to avoid triggering 429 / throttling.
+_rate_lock = threading.Lock()
+_last_call_time = 0.0
+
+
+def _rate_limited_sleep() -> None:
+    """Sleep just enough to maintain the global rate limit across threads."""
+    global _last_call_time
+    with _rate_lock:
+        now = time.monotonic()
+        elapsed = now - _last_call_time
+        if elapsed < _RATE_LIMIT_DELAY:
+            time.sleep(_RATE_LIMIT_DELAY - elapsed)
+        _last_call_time = time.monotonic()
 
 
 def _call_with_retries(api_callable, description="API call", max_retries=_MAX_RETRIES):
@@ -1592,9 +1613,8 @@ def populate_player_career_stats(
 ) -> None:
     """Fetch and load career stats for all active players.
 
-    Iterates over every player in the Players table and calls
-    :class:`PlayerCareerStats` for each.  Rate-limited with a 2-second
-    sleep between requests.
+    Uses a thread pool to fetch multiple players concurrently while
+    respecting the NBA API rate limit via :func:`_rate_limited_sleep`.
 
     Args:
         conn: Open SQLite connection.
@@ -1610,13 +1630,25 @@ def populate_player_career_stats(
         return
 
     logger.info("Fetching career stats for %d players …", len(player_ids))
-    all_rows: list[pd.DataFrame] = []
 
-    for i, pid in enumerate(player_ids):
+    col_map = {
+        "PLAYER_ID": "player_id", "SEASON_ID": "season_id",
+        "TEAM_ID": "team_id", "TEAM_ABBREVIATION": "team_abbreviation",
+        "PLAYER_AGE": "player_age",
+        "GP": "gp", "GS": "gs", "MIN": "min",
+        "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
+        "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
+        "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
+        "OREB": "oreb", "DREB": "dreb", "REB": "reb",
+        "AST": "ast", "STL": "stl", "BLK": "blk",
+        "TOV": "tov", "PF": "pf", "PTS": "pts",
+    }
+
+    def _fetch_career(pid: int) -> pd.DataFrame | None:
+        _rate_limited_sleep()
         try:
-            time.sleep(2)  # Rate limit — avoid 429 / throttling.
             df = _call_with_retries(
-                lambda pid=pid: PlayerCareerStats(
+                lambda: PlayerCareerStats(
                     player_id=pid,
                     timeout=_PER_PLAYER_TIMEOUT,
                 ).get_data_frames()[0],
@@ -1628,29 +1660,24 @@ def populate_player_career_stats(
                 "Failed to fetch career stats for player %d after %d attempts — skipping.",
                 pid, _MAX_RETRIES_PER_PLAYER,
             )
-            continue
-
+            return None
         if df.empty:
-            continue
-
-        col_map = {
-            "PLAYER_ID": "player_id", "SEASON_ID": "season_id",
-            "TEAM_ID": "team_id", "TEAM_ABBREVIATION": "team_abbreviation",
-            "PLAYER_AGE": "player_age",
-            "GP": "gp", "GS": "gs", "MIN": "min",
-            "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
-            "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
-            "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
-            "OREB": "oreb", "DREB": "dreb", "REB": "reb",
-            "AST": "ast", "STL": "stl", "BLK": "blk",
-            "TOV": "tov", "PF": "pf", "PTS": "pts",
-        }
+            return None
         available = {k: v for k, v in col_map.items() if k in df.columns}
-        mapped = df[list(available.keys())].rename(columns=available)
-        all_rows.append(mapped)
+        return df[list(available.keys())].rename(columns=available)
 
-        if (i + 1) % 50 == 0:
-            logger.info("  … career stats: %d / %d players processed.", i + 1, len(player_ids))
+    all_rows: list[pd.DataFrame] = []
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=_PLAYER_WORKERS) as pool:
+        futures = {pool.submit(_fetch_career, pid): pid for pid in player_ids}
+        for future in as_completed(futures):
+            mapped = future.result()
+            if mapped is not None:
+                all_rows.append(mapped)
+            done += 1
+            if done % 50 == 0:
+                logger.info("  … career stats: %d / %d players processed.", done, len(player_ids))
 
     if not all_rows:
         logger.info("Player_Career_Stats: no career data retrieved.")
@@ -1670,8 +1697,8 @@ def populate_shot_chart(
 ) -> None:
     """Fetch and load shot chart data for all active players.
 
-    Uses :class:`ShotChartDetail` with each player's ID and the season.
-    Rate-limited with a 1-second sleep between requests.
+    Uses a thread pool to fetch multiple players concurrently while
+    respecting the NBA API rate limit via :func:`_rate_limited_sleep`.
 
     Args:
         conn: Open SQLite connection.
@@ -1687,13 +1714,31 @@ def populate_shot_chart(
         return
 
     logger.info("Fetching shot chart for %d players …", len(player_ids))
-    all_rows: list[pd.DataFrame] = []
 
-    for i, pid in enumerate(player_ids):
+    col_map = {
+        "GAME_ID": "game_id", "GAME_EVENT_ID": "game_event_id",
+        "PLAYER_ID": "player_id", "PLAYER_NAME": "player_name",
+        "TEAM_ID": "team_id", "TEAM_NAME": "team_name",
+        "PERIOD": "period",
+        "MINUTES_REMAINING": "minutes_remaining",
+        "SECONDS_REMAINING": "seconds_remaining",
+        "EVENT_TYPE": "event_type", "ACTION_TYPE": "action_type",
+        "SHOT_TYPE": "shot_type",
+        "SHOT_ZONE_BASIC": "shot_zone_basic",
+        "SHOT_ZONE_AREA": "shot_zone_area",
+        "SHOT_ZONE_RANGE": "shot_zone_range",
+        "SHOT_DISTANCE": "shot_distance",
+        "LOC_X": "loc_x", "LOC_Y": "loc_y",
+        "SHOT_ATTEMPTED_FLAG": "shot_attempted_flag",
+        "SHOT_MADE_FLAG": "shot_made_flag",
+        "GAME_DATE": "game_date", "HTM": "htm", "VTM": "vtm",
+    }
+
+    def _fetch_shots(pid: int) -> pd.DataFrame | None:
+        _rate_limited_sleep()
         try:
-            time.sleep(2)
             df = _call_with_retries(
-                lambda pid=pid: ShotChartDetail(
+                lambda: ShotChartDetail(
                     team_id=0,
                     player_id=pid,
                     season_nullable=season,
@@ -1709,36 +1754,26 @@ def populate_shot_chart(
                 "Failed to fetch shot chart for player %d after %d attempts — skipping.",
                 pid, _MAX_RETRIES_PER_PLAYER,
             )
-            continue
-
+            return None
         if df.empty:
-            continue
-
-        col_map = {
-            "GAME_ID": "game_id", "GAME_EVENT_ID": "game_event_id",
-            "PLAYER_ID": "player_id", "PLAYER_NAME": "player_name",
-            "TEAM_ID": "team_id", "TEAM_NAME": "team_name",
-            "PERIOD": "period",
-            "MINUTES_REMAINING": "minutes_remaining",
-            "SECONDS_REMAINING": "seconds_remaining",
-            "EVENT_TYPE": "event_type", "ACTION_TYPE": "action_type",
-            "SHOT_TYPE": "shot_type",
-            "SHOT_ZONE_BASIC": "shot_zone_basic",
-            "SHOT_ZONE_AREA": "shot_zone_area",
-            "SHOT_ZONE_RANGE": "shot_zone_range",
-            "SHOT_DISTANCE": "shot_distance",
-            "LOC_X": "loc_x", "LOC_Y": "loc_y",
-            "SHOT_ATTEMPTED_FLAG": "shot_attempted_flag",
-            "SHOT_MADE_FLAG": "shot_made_flag",
-            "GAME_DATE": "game_date", "HTM": "htm", "VTM": "vtm",
-        }
+            return None
         available = {k: v for k, v in col_map.items() if k in df.columns}
         mapped = df[list(available.keys())].rename(columns=available)
         mapped["season"] = season
-        all_rows.append(mapped)
+        return mapped
 
-        if (i + 1) % 50 == 0:
-            logger.info("  … shot chart: %d / %d players processed.", i + 1, len(player_ids))
+    all_rows: list[pd.DataFrame] = []
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=_PLAYER_WORKERS) as pool:
+        futures = {pool.submit(_fetch_shots, pid): pid for pid in player_ids}
+        for future in as_completed(futures):
+            mapped = future.result()
+            if mapped is not None:
+                all_rows.append(mapped)
+            done += 1
+            if done % 50 == 0:
+                logger.info("  … shot chart: %d / %d players processed.", done, len(player_ids))
 
     if not all_rows:
         logger.info("Shot_Chart: no shot data retrieved.")
@@ -1781,7 +1816,8 @@ def populate_game_advanced_box_scores(
     """Fetch and load advanced, scoring, usage, tracking, and matchup box
     scores for games.
 
-    For each game, makes up to 5 API calls (one per box score type).  Skips
+    Uses a thread pool to fetch multiple games concurrently.  Within each
+    game the five box-score types are also fetched in parallel.  Skips
     games whose ``game_id`` is already present in ``Box_Score_Advanced`` to
     avoid redundant fetches.
 
@@ -1813,235 +1849,275 @@ def populate_game_advanced_box_scores(
 
     logger.info("Fetching advanced box scores for %d games …", len(new_game_ids))
 
-    for i, gid in enumerate(new_game_ids):
-        _fetch_single_game_box_scores(conn, gid, season)
-        if (i + 1) % 25 == 0:
-            logger.info("  … box scores: %d / %d games processed.", i + 1, len(new_game_ids))
-            conn.commit()  # Periodic commit to avoid losing progress.
+    done = 0
+    with ThreadPoolExecutor(max_workers=_GAME_WORKERS) as pool:
+        futures = {
+            pool.submit(_fetch_single_game_box_scores, game_id=gid, season=season): gid
+            for gid in new_game_ids
+        }
+        for future in as_completed(futures):
+            results = future.result()
+            # Write all returned DataFrames to the database (main thread).
+            for table_name, df in results.items():
+                df.to_sql(table_name, conn, if_exists="append", index=False)
+            done += 1
+            if done % 25 == 0:
+                logger.info("  … box scores: %d / %d games processed.", done, len(new_game_ids))
+                conn.commit()  # Periodic commit to avoid losing progress.
 
     logger.info("Game box scores: completed processing %d games.", len(new_game_ids))
 
 
 def _fetch_single_game_box_scores(
-    conn: sqlite3.Connection, game_id: str, season: str,
-) -> None:
-    """Fetch all 5 advanced box score types for a single game and insert.
+    game_id: str, season: str,
+) -> dict[str, pd.DataFrame]:
+    """Fetch all 5 advanced box score types for a single game concurrently.
 
     Each box score endpoint call is wrapped in a try/except so a failure
-    on one type does not block the others.
+    on one type does not block the others.  Returns a mapping of
+    table-name → DataFrame for the caller to insert.
 
     Args:
-        conn: Open SQLite connection.
         game_id: NBA game ID string.
         season: NBA season string.
+
+    Returns:
+        Dict mapping SQL table names to DataFrames ready for insertion.
     """
+    results: dict[str, pd.DataFrame] = {}
+    results_lock = threading.Lock()
+
     # --- Box Score Advanced ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScoreAdvancedV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScoreAdvancedV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id", "personId": "person_id",
-                "teamId": "team_id", "position": "position",
-                "minutes": "minutes",
-                "estimatedOffensiveRating": "est_off_rating",
-                "offensiveRating": "off_rating",
-                "estimatedDefensiveRating": "est_def_rating",
-                "defensiveRating": "def_rating",
-                "estimatedNetRating": "est_net_rating",
-                "netRating": "net_rating",
-                "assistPercentage": "ast_pct",
-                "assistToTurnover": "ast_to_tov",
-                "assistRatio": "ast_ratio",
-                "offensiveReboundPercentage": "oreb_pct",
-                "defensiveReboundPercentage": "dreb_pct",
-                "reboundPercentage": "reb_pct",
-                "turnoverRatio": "tov_ratio",
-                "effectiveFieldGoalPercentage": "efg_pct",
-                "trueShootingPercentage": "ts_pct",
-                "usagePercentage": "usg_pct",
-                "estimatedUsagePercentage": "est_usg_pct",
-                "estimatedPace": "est_pace",
-                "pace": "pace", "pacePerGame": "pace_per40",
-                "possessions": "possessions", "PIE": "pie",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Box_Score_Advanced", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScoreAdvancedV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    def _fetch_advanced() -> None:
+        _rate_limited_sleep()
+        try:
+            df = _call_with_retries(
+                lambda: BoxScoreAdvancedV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
+                description=f"BoxScoreAdvancedV3(game={game_id})",
+            )
+            if not df.empty:
+                col_map = {
+                    "gameId": "game_id", "personId": "person_id",
+                    "teamId": "team_id", "position": "position",
+                    "minutes": "minutes",
+                    "estimatedOffensiveRating": "est_off_rating",
+                    "offensiveRating": "off_rating",
+                    "estimatedDefensiveRating": "est_def_rating",
+                    "defensiveRating": "def_rating",
+                    "estimatedNetRating": "est_net_rating",
+                    "netRating": "net_rating",
+                    "assistPercentage": "ast_pct",
+                    "assistToTurnover": "ast_to_tov",
+                    "assistRatio": "ast_ratio",
+                    "offensiveReboundPercentage": "oreb_pct",
+                    "defensiveReboundPercentage": "dreb_pct",
+                    "reboundPercentage": "reb_pct",
+                    "turnoverRatio": "tov_ratio",
+                    "effectiveFieldGoalPercentage": "efg_pct",
+                    "trueShootingPercentage": "ts_pct",
+                    "usagePercentage": "usg_pct",
+                    "estimatedUsagePercentage": "est_usg_pct",
+                    "estimatedPace": "est_pace",
+                    "pace": "pace", "pacePerGame": "pace_per40",
+                    "possessions": "possessions", "PIE": "pie",
+                }
+                available = {k: v for k, v in col_map.items() if k in df.columns}
+                result = df[list(available.keys())].rename(columns=available)
+                result["season"] = season
+                if "game_id" not in result.columns:
+                    result["game_id"] = game_id
+                with results_lock:
+                    results["Box_Score_Advanced"] = result
+        except Exception:
+            logger.debug("BoxScoreAdvancedV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
 
     # --- Box Score Scoring ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScoreScoringV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScoreScoringV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id", "personId": "person_id",
-                "teamId": "team_id", "minutes": "minutes",
-                "percentageFieldGoalsAttempted2pt": "pct_fga_2pt",
-                "percentageFieldGoalsAttempted3pt": "pct_fga_3pt",
-                "percentagePoints2pt": "pct_pts_2pt",
-                "percentagePointsMidrange2pt": "pct_pts_mid2pt",
-                "percentagePoints3pt": "pct_pts_3pt",
-                "percentagePointsFastBreak": "pct_pts_fast_break",
-                "percentagePointsFreeThrow": "pct_pts_ft",
-                "percentagePointsOffTurnovers": "pct_pts_off_tov",
-                "percentagePointsPaint": "pct_pts_paint",
-                "percentageAssisted2pt": "pct_assisted_2pt",
-                "percentageUnassisted2pt": "pct_unassisted_2pt",
-                "percentageAssisted3pt": "pct_assisted_3pt",
-                "percentageUnassisted3pt": "pct_unassisted_3pt",
-                "percentageAssistedFGM": "pct_assisted_fgm",
-                "percentageUnassistedFGM": "pct_unassisted_fgm",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Box_Score_Scoring", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScoreScoringV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    def _fetch_scoring() -> None:
+        _rate_limited_sleep()
+        try:
+            df = _call_with_retries(
+                lambda: BoxScoreScoringV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
+                description=f"BoxScoreScoringV3(game={game_id})",
+            )
+            if not df.empty:
+                col_map = {
+                    "gameId": "game_id", "personId": "person_id",
+                    "teamId": "team_id", "minutes": "minutes",
+                    "percentageFieldGoalsAttempted2pt": "pct_fga_2pt",
+                    "percentageFieldGoalsAttempted3pt": "pct_fga_3pt",
+                    "percentagePoints2pt": "pct_pts_2pt",
+                    "percentagePointsMidrange2pt": "pct_pts_mid2pt",
+                    "percentagePoints3pt": "pct_pts_3pt",
+                    "percentagePointsFastBreak": "pct_pts_fast_break",
+                    "percentagePointsFreeThrow": "pct_pts_ft",
+                    "percentagePointsOffTurnovers": "pct_pts_off_tov",
+                    "percentagePointsPaint": "pct_pts_paint",
+                    "percentageAssisted2pt": "pct_assisted_2pt",
+                    "percentageUnassisted2pt": "pct_unassisted_2pt",
+                    "percentageAssisted3pt": "pct_assisted_3pt",
+                    "percentageUnassisted3pt": "pct_unassisted_3pt",
+                    "percentageAssistedFGM": "pct_assisted_fgm",
+                    "percentageUnassistedFGM": "pct_unassisted_fgm",
+                }
+                available = {k: v for k, v in col_map.items() if k in df.columns}
+                result = df[list(available.keys())].rename(columns=available)
+                result["season"] = season
+                if "game_id" not in result.columns:
+                    result["game_id"] = game_id
+                with results_lock:
+                    results["Box_Score_Scoring"] = result
+        except Exception:
+            logger.debug("BoxScoreScoringV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
 
     # --- Box Score Usage ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScoreUsageV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScoreUsageV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id", "personId": "person_id",
-                "teamId": "team_id", "minutes": "minutes",
-                "usagePercentage": "usg_pct",
-                "percentageFieldGoalsMade": "pct_fgm",
-                "percentageFieldGoalsAttempted": "pct_fga",
-                "percentageThreePointersMade": "pct_fg3m",
-                "percentageThreePointersAttempted": "pct_fg3a",
-                "percentageFreeThrowsMade": "pct_ftm",
-                "percentageFreeThrowsAttempted": "pct_fta",
-                "percentageOffensiveRebounds": "pct_oreb",
-                "percentageDefensiveRebounds": "pct_dreb",
-                "percentageRebounds": "pct_reb",
-                "percentageAssists": "pct_ast",
-                "percentageTurnovers": "pct_tov",
-                "percentageSteals": "pct_stl",
-                "percentageBlocks": "pct_blk",
-                "percentageBlocksAllowed": "pct_blka",
-                "percentagePersonalFouls": "pct_pf",
-                "percentagePersonalFoulsDrawn": "pct_pfd",
-                "percentagePoints": "pct_pts",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Box_Score_Usage", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScoreUsageV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    def _fetch_usage() -> None:
+        _rate_limited_sleep()
+        try:
+            df = _call_with_retries(
+                lambda: BoxScoreUsageV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
+                description=f"BoxScoreUsageV3(game={game_id})",
+            )
+            if not df.empty:
+                col_map = {
+                    "gameId": "game_id", "personId": "person_id",
+                    "teamId": "team_id", "minutes": "minutes",
+                    "usagePercentage": "usg_pct",
+                    "percentageFieldGoalsMade": "pct_fgm",
+                    "percentageFieldGoalsAttempted": "pct_fga",
+                    "percentageThreePointersMade": "pct_fg3m",
+                    "percentageThreePointersAttempted": "pct_fg3a",
+                    "percentageFreeThrowsMade": "pct_ftm",
+                    "percentageFreeThrowsAttempted": "pct_fta",
+                    "percentageOffensiveRebounds": "pct_oreb",
+                    "percentageDefensiveRebounds": "pct_dreb",
+                    "percentageRebounds": "pct_reb",
+                    "percentageAssists": "pct_ast",
+                    "percentageTurnovers": "pct_tov",
+                    "percentageSteals": "pct_stl",
+                    "percentageBlocks": "pct_blk",
+                    "percentageBlocksAllowed": "pct_blka",
+                    "percentagePersonalFouls": "pct_pf",
+                    "percentagePersonalFoulsDrawn": "pct_pfd",
+                    "percentagePoints": "pct_pts",
+                }
+                available = {k: v for k, v in col_map.items() if k in df.columns}
+                result = df[list(available.keys())].rename(columns=available)
+                result["season"] = season
+                if "game_id" not in result.columns:
+                    result["game_id"] = game_id
+                with results_lock:
+                    results["Box_Score_Usage"] = result
+        except Exception:
+            logger.debug("BoxScoreUsageV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
 
     # --- Box Score Player Tracking ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScorePlayerTrackV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScorePlayerTrackV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id", "personId": "person_id",
-                "teamId": "team_id", "teamTricode": "team_tricode",
-                "firstName": "first_name", "familyName": "family_name",
-                "position": "position", "comment": "comment",
-                "jerseyNum": "jersey_num", "minutes": "minutes",
-                "speed": "speed", "distance": "distance",
-                "reboundChancesOffensive": "rebound_chances_offensive",
-                "reboundChancesDefensive": "rebound_chances_defensive",
-                "reboundChancesTotal": "rebound_chances_total",
-                "touches": "touches",
-                "secondaryAssists": "secondary_assists",
-                "freeThrowAssists": "free_throw_assists",
-                "passes": "passes", "assists": "assists",
-                "contestedFieldGoalsMade": "contested_fg_made",
-                "contestedFieldGoalsAttempted": "contested_fg_attempted",
-                "contestedFieldGoalPercentage": "contested_fg_pct",
-                "uncontestedFieldGoalsMade": "uncontested_fg_made",
-                "uncontestedFieldGoalsAttempted": "uncontested_fg_attempted",
-                "uncontestedFieldGoalPercentage": "uncontested_fg_pct",
-                "fieldGoalPercentage": "fg_pct",
-                "defendedAtRimFieldGoalsMade": "defended_at_rim_fg_made",
-                "defendedAtRimFieldGoalsAttempted": "defended_at_rim_fg_attempted",
-                "defendedAtRimFieldGoalPercentage": "defended_at_rim_fg_pct",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Player_Tracking_Stats", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScorePlayerTrackV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    def _fetch_tracking() -> None:
+        _rate_limited_sleep()
+        try:
+            df = _call_with_retries(
+                lambda: BoxScorePlayerTrackV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
+                description=f"BoxScorePlayerTrackV3(game={game_id})",
+            )
+            if not df.empty:
+                col_map = {
+                    "gameId": "game_id", "personId": "person_id",
+                    "teamId": "team_id", "teamTricode": "team_tricode",
+                    "firstName": "first_name", "familyName": "family_name",
+                    "position": "position", "comment": "comment",
+                    "jerseyNum": "jersey_num", "minutes": "minutes",
+                    "speed": "speed", "distance": "distance",
+                    "reboundChancesOffensive": "rebound_chances_offensive",
+                    "reboundChancesDefensive": "rebound_chances_defensive",
+                    "reboundChancesTotal": "rebound_chances_total",
+                    "touches": "touches",
+                    "secondaryAssists": "secondary_assists",
+                    "freeThrowAssists": "free_throw_assists",
+                    "passes": "passes", "assists": "assists",
+                    "contestedFieldGoalsMade": "contested_fg_made",
+                    "contestedFieldGoalsAttempted": "contested_fg_attempted",
+                    "contestedFieldGoalPercentage": "contested_fg_pct",
+                    "uncontestedFieldGoalsMade": "uncontested_fg_made",
+                    "uncontestedFieldGoalsAttempted": "uncontested_fg_attempted",
+                    "uncontestedFieldGoalPercentage": "uncontested_fg_pct",
+                    "fieldGoalPercentage": "fg_pct",
+                    "defendedAtRimFieldGoalsMade": "defended_at_rim_fg_made",
+                    "defendedAtRimFieldGoalsAttempted": "defended_at_rim_fg_attempted",
+                    "defendedAtRimFieldGoalPercentage": "defended_at_rim_fg_pct",
+                }
+                available = {k: v for k, v in col_map.items() if k in df.columns}
+                result = df[list(available.keys())].rename(columns=available)
+                result["season"] = season
+                if "game_id" not in result.columns:
+                    result["game_id"] = game_id
+                with results_lock:
+                    results["Player_Tracking_Stats"] = result
+        except Exception:
+            logger.debug("BoxScorePlayerTrackV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
 
     # --- Box Score Matchups ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScoreMatchupsV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScoreMatchupsV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id",
-                "personIdOff": "person_id_off",
-                "personIdDef": "person_id_def",
-                "teamId": "team_id",
-                "matchupMinutes": "matchup_min",
-                "matchupMinutesSort": "matchup_min_sort",
-                "partialPossessions": "partial_poss",
-                "percentageDefenderTotalTime": "pct_def_total_time",
-                "percentageOffensiveTotalTime": "pct_off_total_time",
-                "percentageTotalTimeBothOn": "pct_total_time_both_on",
-                "switchesOn": "switches_on",
-                "playerPoints": "player_pts",
-                "teamPoints": "team_pts",
-                "matchupAssists": "matchup_ast",
-                "matchupPotentialAssists": "matchup_potential_ast",
-                "matchupTurnovers": "matchup_tov",
-                "matchupBlocks": "matchup_blk",
-                "matchupFieldGoalsMade": "matchup_fgm",
-                "matchupFieldGoalsAttempted": "matchup_fga",
-                "matchupFieldGoalPercentage": "matchup_fg_pct",
-                "matchupThreePointersMade": "matchup_fg3m",
-                "matchupThreePointersAttempted": "matchup_fg3a",
-                "matchupThreePointerPercentage": "matchup_fg3_pct",
-                "helpBlocks": "help_blk",
-                "helpFieldGoalsMade": "help_fgm",
-                "helpFieldGoalsAttempted": "help_fga",
-                "helpFieldGoalPercentage": "help_fg_pct",
-                "matchupFreeThrowsMade": "matchup_ftm",
-                "matchupFreeThrowsAttempted": "matchup_fta",
-                "shootingFouls": "shooting_fouls",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Box_Score_Matchups", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScoreMatchupsV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    def _fetch_matchups() -> None:
+        _rate_limited_sleep()
+        try:
+            df = _call_with_retries(
+                lambda: BoxScoreMatchupsV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
+                description=f"BoxScoreMatchupsV3(game={game_id})",
+            )
+            if not df.empty:
+                col_map = {
+                    "gameId": "game_id",
+                    "personIdOff": "person_id_off",
+                    "personIdDef": "person_id_def",
+                    "teamId": "team_id",
+                    "matchupMinutes": "matchup_min",
+                    "matchupMinutesSort": "matchup_min_sort",
+                    "partialPossessions": "partial_poss",
+                    "percentageDefenderTotalTime": "pct_def_total_time",
+                    "percentageOffensiveTotalTime": "pct_off_total_time",
+                    "percentageTotalTimeBothOn": "pct_total_time_both_on",
+                    "switchesOn": "switches_on",
+                    "playerPoints": "player_pts",
+                    "teamPoints": "team_pts",
+                    "matchupAssists": "matchup_ast",
+                    "matchupPotentialAssists": "matchup_potential_ast",
+                    "matchupTurnovers": "matchup_tov",
+                    "matchupBlocks": "matchup_blk",
+                    "matchupFieldGoalsMade": "matchup_fgm",
+                    "matchupFieldGoalsAttempted": "matchup_fga",
+                    "matchupFieldGoalPercentage": "matchup_fg_pct",
+                    "matchupThreePointersMade": "matchup_fg3m",
+                    "matchupThreePointersAttempted": "matchup_fg3a",
+                    "matchupThreePointerPercentage": "matchup_fg3_pct",
+                    "helpBlocks": "help_blk",
+                    "helpFieldGoalsMade": "help_fgm",
+                    "helpFieldGoalsAttempted": "help_fga",
+                    "helpFieldGoalPercentage": "help_fg_pct",
+                    "matchupFreeThrowsMade": "matchup_ftm",
+                    "matchupFreeThrowsAttempted": "matchup_fta",
+                    "shootingFouls": "shooting_fouls",
+                }
+                available = {k: v for k, v in col_map.items() if k in df.columns}
+                result = df[list(available.keys())].rename(columns=available)
+                result["season"] = season
+                if "game_id" not in result.columns:
+                    result["game_id"] = game_id
+                with results_lock:
+                    results["Box_Score_Matchups"] = result
+        except Exception:
+            logger.debug("BoxScoreMatchupsV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+
+    # Fetch all 5 box-score types concurrently for this game.
+    with ThreadPoolExecutor(max_workers=_BOX_SCORE_TYPE_WORKERS) as pool:
+        futs = [
+            pool.submit(_fetch_advanced),
+            pool.submit(_fetch_scoring),
+            pool.submit(_fetch_usage),
+            pool.submit(_fetch_tracking),
+            pool.submit(_fetch_matchups),
+        ]
+        for f in futs:
+            f.result()  # Wait for all to complete; exceptions are handled inside.
+
+    return results
 
 
 # ---------------------------------------------------------------------------
