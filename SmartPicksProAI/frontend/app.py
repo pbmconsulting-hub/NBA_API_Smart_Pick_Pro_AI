@@ -519,10 +519,11 @@ with st.sidebar:
             st.error(f"Failed: {result.get('message', 'Unknown error')}")
 
     st.divider()
-    st.caption(
+    st.markdown(
         "<div style='text-align:center; color:rgba(255,255,255,0.2); "
         "font-size:0.65rem;'>SmartPicksProAI v3.0<br>"
         "Luxury AI Portal</div>",
+        unsafe_allow_html=True,
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -832,7 +833,7 @@ elif current_page == "player_profile":
             bio_cols[6].metric("GP", bio.get("gp", "N/A"))
             bio_cols[7].metric(
                 "USG%",
-                f"{(bio.get('usg_pct') or 0):.1%}" if bio.get("usg_pct") else "N/A",
+                f"{(bio.get('usg_pct') or 0):.1%}",
             )
 
         # Last 5 averages hero row
@@ -1182,8 +1183,8 @@ elif current_page == "team_detail":
                 dc[0].metric("Arena", details.get("arena", "N/A"))
                 dc[1].metric(
                     "Capacity",
-                    f"{details.get('arena_capacity', 'N/A'):,}"
-                    if details.get("arena_capacity") else "N/A",
+                    f"{details['arena_capacity']:,}"
+                    if details.get("arena_capacity") is not None else "N/A",
                 )
                 dc[2].metric("Founded", details.get("year_founded", "N/A"))
                 dc2 = st.columns(3)
