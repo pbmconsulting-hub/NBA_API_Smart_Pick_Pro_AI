@@ -1,0 +1,32 @@
+{
+  "Tristan Enaruna": {
+    "id": 1641789,
+    "team": "CLE",
+    "source": "manual",
+    "added_at": "2026-03-27"
+  },
+  "Josh Oduro": {
+    "id": 1641790,
+    "team": "NOP",
+    "source": "manual",
+    "added_at": "2026-03-27"
+  },
+  "Alex Morales": {
+    "id": 1641791,
+    "team": "ORL",
+    "source": "manual",
+    "added_at": "2026-03-27"
+  },
+  "Mouhamadou Gueye": {
+    "id": 1631315,
+    "team": "NYK",
+    "source": "manual",
+    "added_at": "2026-03-27"
+  },
+  "Jacob Toppin": {
+    "id": 1631316,
+    "team": "NYK",
+    "source": "manual",
+    "added_at": "2026-03-27"
+  }
+}

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <!--
+    REFERENCE DESIGN — TARGET LAYOUT FOR FULL BREAKDOWN / GAME REPORT SECTION
+    ============================================================================
+    This file documents the design specification for the SmartBetPro NBA
+    Game Report page (pages/9_📋_Game_Report.py).
+
+    The actual HTML generation is performed by get_game_report_html() in
+    styles/theme.py, which implements the Quantum Design System (QDS) visual
+    language described here.
+
+    KEY DESIGN ELEMENTS INCORPORATED IN THE LIVE REPORT:
+    ──────────────────────────────────────────────────────
+    1. DARK FUTURISTIC THEME
+       - Background: #0a0f1a with glass-morphism card layers (#141a2d)
+       - Cyan (#00ffd5) / purple (#c800ff) gradient accents
+       - Neon glow effects on interactive elements and badges
+       - Orbitron font for headings; Montserrat for body text
+
+    2. EDGE SCORE™ / SAFE SCORE™ PROP CARDS
+       Each card displays:
+         • Player name with team badge (color-coded to team primary color)
+         • Stat type (Points / Rebounds / Assists / etc.) and line number
+         • OVER (green #00ffd5) / UNDER (orange #ff5e00) direction with color coding
+         • Animated confidence/SAFE Score progress bar (0-100 scale)
+             – Green gradient  : high confidence (≥ 80%)
+             – Yellow gradient : moderate confidence (60–79%)
+             – Orange gradient : lower confidence (< 60%)
+         • Four metric sub-cards: Season Stats, Matchup Edge, AI Model Signal, Confidence
+         • Key analysis factors as pill badges
+             (e.g. "🔥 Hot Streak", "✅ Favorable Matchup", "📊 Consistent")
+         • Plain-English AI verdict paragraph
+
+    3. COLLAPSIBLE SECTIONS
+       Each matchup section uses click-to-collapse panels (JS-powered in the
+       self-contained iframe HTML; Streamlit st.expander wrappers at page level).
+       Sections: Team Matchup Breakdown · Top Prop Bets · Entry Strategy Matrix ·
+                 Framework Logic · Final Word
+
+    4. ANIMATED CONFIDENCE BARS
+       CSS transition (1.5 s cubic-bezier) triggers on DOMContentLoaded.
+       Bars are color-coded by tier:
+         – Platinum / High  (#00ffd5 cyan gradient)
+         – Gold / Medium    (#ffcc00 gold gradient)
+         – Silver           (#00b4ff blue gradient)
+         – Bronze / Low     (#ff5e00 orange gradient)
+
+    5. ENTRY STRATEGY MATRIX
+       Styled table showing recommended multi-leg entry combinations:
+         • Power Play  (2-leg) — highest-confidence pair
+         • Triple Threat (3-leg) — top 3 picks
+         • Max Parlay (5-leg) — diversified 5-leg stack
+       Each row shows: Combo Type, Picks, SAFE Avg score, Strategy description.
+
+    6. TEAM ANALYSIS CARDS
+       Two side-by-side cards (away / home) showing:
+         • Team logo, abbreviation, and win/loss record
+         • Key players with PPG badges
+         • Matchup insight paragraph
+
+    7. PREMIUM BADGE STYLING WITH GLOW EFFECTS
+       Tier badge classes and glow shadows:
+         • Platinum (.qds-tier-diamond) — cyan border + glow
+             box-shadow: 0 0 8px rgba(0,255,213,0.5)
+         • Gold     (.qds-tier-lock)    — gold border + glow
+             box-shadow: 0 0 8px rgba(255,204,0,0.5)
+         • Silver   (.qds-tier-check)   — blue border + glow
+             box-shadow: 0 0 8px rgba(0,180,255,0.4)
+         • Bronze   (.qds-tier-caution) — orange border + glow
+             box-shadow: 0 0 8px rgba(255,94,0,0.4)
+
+    IMPLEMENTATION FILES:
+    ──────────────────────
+    • styles/theme.py
+        – get_game_report_html()          : full self-contained HTML report
+        – get_qds_prop_card_html()        : individual prop card component
+        – get_qds_confidence_bar_html()   : animated confidence bar
+        – get_qds_strategy_table_html()   : entry strategy matrix table
+        – get_qds_matchup_header_html()   : game header with team cards
+    • pages/9_📋_Game_Report.py
+        – Per-matchup st.expander sections
+        – Overall Entry Strategy Matrix at page bottom
+
+    NOTE: This placeholder file is committed as a design reference document.
+    The original premium MLB prop betting report (Rangers vs Red Sox) that
+    inspired this design is the target aesthetic for all Game Report styling.
+  -->
+  <title>SmartBetPro NBA — Reference Design Spec</title>
+  <style>
+    body {
+      font-family: 'Courier New', monospace;
+      background: #0a0f1a;
+      color: #a0b4d0;
+      padding: 40px;
+      max-width: 900px;
+      margin: 0 auto;
+      line-height: 1.7;
+    }
+    h1 { color: #00ffd5; font-size: 1.4rem; margin-bottom: 6px; }
+    h2 { color: #00b4ff; font-size: 1rem; margin-top: 24px; }
+    code { color: #ffcc00; background: rgba(255,204,0,0.08); padding: 1px 5px; border-radius: 3px; }
+    a { color: #00ffd5; }
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      margin: 2px;
+    }
+    .platinum { background: rgba(0,255,213,0.12); border: 1px solid #00ffd5;
+                color: #00ffd5; box-shadow: 0 0 8px rgba(0,255,213,0.5); }
+    .gold     { background: rgba(255,204,0,0.12); border: 1px solid #ffcc00;
+                color: #ffcc00; box-shadow: 0 0 8px rgba(255,204,0,0.5); }
+    .silver   { background: rgba(0,180,255,0.12); border: 1px solid #00b4ff;
+                color: #00b4ff; box-shadow: 0 0 8px rgba(0,180,255,0.4); }
+    .bronze   { background: rgba(255,94,0,0.10);  border: 1px solid #ff5e00;
+                color: #ff5e00; box-shadow: 0 0 8px rgba(255,94,0,0.4); }
+  </style>
+</head>
+<body>
+  <h1>📋 SmartBetPro NBA — Reference Design Specification</h1>
+  <p>
+    This file defines the target visual design for the
+    <strong>Full Breakdown / Game Report</strong> section.<br>
+    See <code>styles/theme.py → get_game_report_html()</code> for the live implementation.
+  </p>
+
+  <h2>Tier Badge Examples</h2>
+  <span class="badge platinum">💎 PLATINUM — 95%+ Confidence</span>
+  <span class="badge gold">🔒 GOLD — 90% Confidence</span>
+  <span class="badge silver">✓ SILVER — 85% Confidence</span>
+  <span class="badge bronze">⭐ BRONZE — 80% Confidence</span>
+
+  <h2>Design Tokens</h2>
+  <p>
+    <code>--qds-primary: #00ffd5</code> · Cyan (main accent)<br>
+    <code>--qds-accent: #00b4ff</code> · Blue (secondary accent)<br>
+    <code>--qds-success: #00ff88</code> · Green (OVER / positive)<br>
+    <code>--qds-danger: #ff3860</code> · Red (UNDER / negative)<br>
+    <code>--qds-warning: #ffcc00</code> · Gold (Gold tier)<br>
+    <code>--qds-info: #00b4ff</code> · Blue (Silver tier / info)<br>
+    <code>--qds-bg: #0a101f</code> · Page background<br>
+    <code>--qds-card: #141a2d</code> · Card background
+  </p>
+
+  <h2>Confidence Bar Color Coding</h2>
+  <p>
+    ≥ 80% → <span style="color:#00ffd5;">■</span> Cyan gradient (Platinum/High)<br>
+    60–79% → <span style="color:#ffcc00;">■</span> Gold gradient (Gold/Moderate)<br>
+    40–59% → <span style="color:#00b4ff;">■</span> Blue gradient (Silver/Low)<br>
+    &lt; 40% → <span style="color:#ff5e00;">■</span> Orange gradient (Bronze/Very Low)
+  </p>
+</body>
+</html>

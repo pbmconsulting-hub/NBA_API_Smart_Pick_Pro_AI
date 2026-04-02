@@ -1,0 +1,7 @@
+[run]
+source = engine,data,utils,api,tracking
+omit = tests/*,*/__pycache__/*,engine/pipeline/run_pipeline.py
+
+[report]
+show_missing = true
+fail_under = 40

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run test suite
+        run: python -m pytest tests/ -v --tb=short
+
+      - name: Syntax check all Python files
+        run: |
+          find . -name "*.py" -not -path "./.git/*" -not -path "./.venv/*" | while read f; do
+            python -m py_compile "$f" || exit 1
+          done
+
+      - name: Secrets check
+        run: |
+          # Fail if any file (outside examples) contains real Stripe key patterns
+          if grep -rn --include="*.py" --include="*.toml" --include="*.yml" --include="*.yaml" --include="*.env" \
+              -E '(sk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,}|whsec_[a-zA-Z0-9]{20,})' \
+              --exclude="*.example" --exclude="secrets.toml.example" --exclude=".env.example" \
+              --exclude-dir=".git" .; then
+            echo "❌ Real Stripe keys detected in source files!"
+            exit 1
+          else
+            echo "✅ No hardcoded Stripe keys found"
+          fi

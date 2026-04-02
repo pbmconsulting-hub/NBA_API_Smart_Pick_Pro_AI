@@ -1,0 +1,463 @@
+<!--
+  QED (Quantum Edge Design System) Reference
+  This file serves as the design reference for the Neural Analysis
+  full breakdown cards in the SmartAI-NBA Streamlit app.
+  Adapted from SmartPickPro's MLB prop analysis template.
+
+  KEY DESIGN PRINCIPLES:
+  ─────────────────────
+  1. Dark space theme — background: #0a0f1a, card surfaces: #14192b
+  2. Primary accent: #ff5e00 (neon orange) — borders, badges, highlights
+  3. Secondary accent: #00c8ff (cyan) — reasoning text, progress bar fill
+  4. Success: #00ff9d (electric green) — positive indicators
+  5. Text hierarchy:
+     - Headings: #ff5e00 via Orbitron (futuristic)
+     - Body / labels: #c0d0e8 (steel blue)
+     - Muted: #8a9bb8
+  6. Cards: border-radius 8px, border-top: 3px solid #ff5e00
+  7. Tier badges: Platinum (#00ffd5), Gold (#ffcc00), Silver (#00b4ff), Bronze (#a0b4d0)
+  8. Confidence progress bar: gradient #ff5e00 → #00c8ff
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QED — Quantum Edge Design System Reference</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ─── Reset & Base ─────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0a0f1a;
+      color: #c0d0e8;
+      font-family: 'Montserrat', sans-serif;
+      padding: 24px;
+      min-height: 100vh;
+    }
+    h1, h2, h3, h4 { font-family: 'Orbitron', sans-serif; }
+
+    /* ─── Page Header ──────────────────────────────────── */
+    .page-header {
+      text-align: center;
+      margin-bottom: 40px;
+      padding: 24px;
+      background: rgba(20,25,43,0.6);
+      border-radius: 12px;
+      border: 1px solid rgba(255,94,0,0.2);
+    }
+    .page-header h1 { color: #ff5e00; font-size: 2rem; margin-bottom: 8px; }
+    .page-header p  { color: #8a9bb8; font-size: 0.9rem; }
+
+    /* ─── Section Label ────────────────────────────────── */
+    .section-label {
+      font-size: 0.7rem;
+      font-family: 'Orbitron', sans-serif;
+      color: #8a9bb8;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin: 32px 0 12px;
+      padding-left: 4px;
+      border-left: 3px solid #ff5e00;
+      padding-left: 10px;
+    }
+
+    /* ─── Prop Card ────────────────────────────────────── */
+    .prop-card {
+      background: #14192b;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border-top: 3px solid #ff5e00;
+      position: relative;
+    }
+
+    /* Tier Badge */
+    .tier-badge {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: 0.5px;
+    }
+    .tier-platinum { background: #00ffd5; color: #0a0f1a; }
+    .tier-gold     { background: #ffcc00; color: #0a0f1a; }
+    .tier-silver   { background: #00b4ff; color: #0a0f1a; }
+    .tier-bronze   { background: #a0b4d0; color: #0a0f1a; }
+
+    /* Player Row */
+    .player-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    .player-headshot {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid #ff5e00;
+      flex-shrink: 0;
+      background: #141a2d;
+    }
+    .player-name {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #ff5e00;
+    }
+    .team-badge {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.1);
+      color: white;
+      font-size: 0.78rem;
+      font-family: 'Montserrat', sans-serif;
+      font-weight: 600;
+      vertical-align: middle;
+    }
+    .prop-desc  { color: #c0d0e8; font-size: 0.92rem; margin-top: 4px; }
+    .score-box  {
+      text-align: center;
+      flex-shrink: 0;
+      margin-left: auto;
+    }
+    .score-label { font-size: 0.62rem; color: #8a9bb8; text-transform: uppercase; letter-spacing: 0.5px; }
+    .score-value {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 2rem;
+      font-weight: 900;
+      color: #ff5e00;
+      line-height: 1;
+    }
+    .score-denom { font-size: 0.85rem; color: #8a9bb8; }
+
+    /* ─── Confidence Bar ───────────────────────────────── */
+    .confidence-bar-wrap {
+      margin: 12px 0;
+    }
+    .confidence-bar-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.82rem;
+      color: #8a9bb8;
+      margin-bottom: 4px;
+    }
+    .confidence-bar-track {
+      height: 8px;
+      background: #1a2035;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .confidence-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #ff5e00, #00c8ff);
+      border-radius: 4px;
+    }
+
+    /* ─── Metrics Grid ─────────────────────────────────── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }
+    .metric-card {
+      background: rgba(20,25,43,0.7);
+      padding: 12px;
+      border-radius: 6px;
+      border-left: 3px solid #ff5e00;
+    }
+    .metric-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .metric-label {
+      flex: 1;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #ff5e00;
+    }
+    .metric-score {
+      background: #ff5e00;
+      color: #0a0f1a;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+    .metric-value {
+      font-size: 0.83rem;
+      color: #c0d0e8;
+    }
+
+    /* ─── Bonus Factors ────────────────────────────────── */
+    .bonus-section { margin-top: 12px; }
+    .bonus-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #8a9bb8;
+      margin-bottom: 6px;
+    }
+    .bonus-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      font-size: 0.83rem;
+      color: #c0d0e8;
+      margin-bottom: 4px;
+    }
+    .bonus-icon { color: #00ffd5; font-weight: 700; }
+
+    /* ─── Parlay Card ──────────────────────────────────── */
+    .parlay-card {
+      background: #14192b;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 14px;
+      border-left: 3px solid #ff5e00;
+    }
+    .parlay-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .parlay-title {
+      font-family: 'Orbitron', sans-serif;
+      color: #ff5e00;
+      font-size: 0.95rem;
+    }
+    .parlay-badge {
+      background: #ff5e00;
+      color: #0a0f1a;
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+    .parlay-pick {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 5px;
+      font-size: 0.88rem;
+    }
+    .parlay-pick-name  { color: #ff5e00; font-weight: 600; }
+    .parlay-pick-desc  { color: #c0d0e8; }
+    .parlay-reasoning {
+      margin-top: 10px;
+      padding: 8px 10px;
+      background: rgba(20,25,43,0.7);
+      border-radius: 4px;
+      font-size: 0.83rem;
+      color: #00c8ff;
+    }
+    .parlay-meta {
+      display: flex;
+      gap: 16px;
+      margin-top: 8px;
+      font-size: 0.78rem;
+      color: #8a9bb8;
+    }
+
+    /* ─── Layout helpers ───────────────────────────────── */
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .col { flex: 1; min-width: 240px; }
+  </style>
+</head>
+<body>
+
+  <div class="page-header">
+    <h1>⚡ Quantum Edge Design System</h1>
+    <p>QED Reference — SmartAI-NBA Neural Analysis Cards &amp; Entry Strategy Matrix</p>
+    <p style="margin-top:6px;font-size:0.78rem;">
+      All production HTML is generated by <code>styles/theme.py</code> and
+      <code>pages/3_⚡_Neural_Analysis.py</code>
+    </p>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SECTION 1: Prop Analysis Card
+       ════════════════════════════════════════════════════ -->
+  <div class="section-label">Section 1 — Prop Analysis Card (QED Prop Card)</div>
+
+  <div class="prop-card">
+    <span class="tier-badge tier-platinum">💎 QUANTUM PICK</span>
+
+    <div class="player-row">
+      <!-- Player headshot (NBA CDN) -->
+      <div class="player-headshot" style="display:flex;align-items:center;justify-content:center;color:#8a9bb8;font-size:1.6rem;">🏀</div>
+
+      <div style="flex:1;">
+        <div class="player-name">
+          LeBron James
+          <span class="team-badge">LAL</span>
+        </div>
+        <div class="prop-desc">🏀 Over 25.5 Points</div>
+      </div>
+
+      <div class="score-box">
+        <div class="score-label">SAFE Score™</div>
+        <div class="score-value">8.4<span class="score-denom">/10</span></div>
+      </div>
+    </div>
+
+    <!-- Confidence Bar -->
+    <div class="confidence-bar-wrap">
+      <div class="confidence-bar-header">
+        <span>🏀 Over 25.5 Points</span>
+        <span>84%</span>
+      </div>
+      <div class="confidence-bar-track">
+        <div class="confidence-bar-fill" style="width:84%;"></div>
+      </div>
+    </div>
+
+    <!-- 4-Column Metrics Grid -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">📊 Situational</span>
+          <span class="metric-score">7.2</span>
+        </div>
+        <div class="metric-value">Avg 27.1 / Line 25.5 (▲1.6)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">🛡️ Archetype Matchup</span>
+          <span class="metric-score">8.0</span>
+        </div>
+        <div class="metric-value">Favorable (0.92x) vs GSW</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">🔥 Form (5-Game)</span>
+          <span class="metric-score">9.0</span>
+        </div>
+        <div class="metric-value">1.12x (Hot 🔥)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">⚡ Edge vs Line</span>
+          <span class="metric-score">7.8</span>
+        </div>
+        <div class="metric-value">+14.2% edge</div>
+      </div>
+    </div>
+
+    <!-- Bonus Factors -->
+    <div class="bonus-section">
+      <div class="bonus-label">Bonus Factors</div>
+      <div class="bonus-item"><span class="bonus-icon">✓</span><span>High game total (228) boosts projection</span></div>
+      <div class="bonus-item"><span class="bonus-icon">✓</span><span>GSW ranks 28th vs SFs in points allowed</span></div>
+      <div class="bonus-item"><span class="bonus-icon">✓</span><span>30+ pts in 3 of last 5 games</span></div>
+    </div>
+  </div>
+
+  <!-- Full Breakdown expander (collapsed — inner content detail) -->
+  <details style="background:rgba(20,25,43,0.5);border-radius:6px;padding:12px;margin-bottom:24px;
+                  border:1px solid rgba(255,94,0,0.15);">
+    <summary style="cursor:pointer;color:#ff5e00;font-weight:600;font-size:0.9rem;">
+      📊 Full Breakdown — LeBron James Points
+    </summary>
+    <div style="padding-top:12px;color:#c0d0e8;font-size:0.85rem;line-height:1.7;">
+      <p><strong style="color:#ff5e00;">📊 Distribution:</strong> 10th pct: 18.0 | Median: 26.1 | 90th pct: 34.0 | Std dev: 5.2</p>
+      <p><strong style="color:#ff5e00;">⬆️ Forces OVER:</strong> High game total, weak opponent defense, recent hot streak</p>
+      <p><strong style="color:#ff5e00;">⬇️ Forces UNDER:</strong> Back-to-back fatigue factor (rest_days=1)</p>
+      <p><strong style="color:#ff5e00;">🔬 Confidence Breakdown:</strong> Probability 84 | Edge 78 | Defense 80 | Form 90</p>
+      <p><strong style="color:#ff5e00;">💡 Why This Pick:</strong> LeBron's 27.1 PPG avg sits well above the 25.5 line. The GSW
+         matchup is favorable (0.92x), game total of 228 pushes pace, and recent form is hot at 1.12x.</p>
+      <p><strong style="color:#ff5e00;">⚠️ Risk Factors:</strong> Back-to-back game, slight blowout risk if large lead late.</p>
+      <p><strong style="color:#ff5e00;">🏁 Verdict:</strong> OVER 25.5 — Strong confidence, favorable matchup and form align.</p>
+    </div>
+  </details>
+
+  <!-- ══════════════════════════════════════════════════════
+       SECTION 2: Entry Strategy Matrix (Parlay Cards)
+       ════════════════════════════════════════════════════ -->
+  <div class="section-label">Section 2 — Entry Strategy Matrix (2–6 Leg Parlays)</div>
+
+  <!-- 2-Leg -->
+  <div class="parlay-card">
+    <div class="parlay-header">
+      <div class="parlay-title">🎲 Power Play (2-Leg)</div>
+      <div class="parlay-badge">Avg EDGE: 8.4/100</div>
+    </div>
+    <div class="parlay-pick"><span class="parlay-pick-name">LeBron James</span><span class="parlay-pick-desc">Over 25.5 Points</span></div>
+    <div class="parlay-pick"><span class="parlay-pick-name">Anthony Davis</span><span class="parlay-pick-desc">Over 12.5 Rebounds</span></div>
+    <div class="parlay-reasoning">💡 All legs 5%+ edge | Anchored by Platinum pick</div>
+    <div class="parlay-meta">
+      <span>Combined prob: 71.0%</span>
+      <span>Avg edge: +12.3%</span>
+    </div>
+  </div>
+
+  <!-- 3-Leg -->
+  <div class="parlay-card">
+    <div class="parlay-header">
+      <div class="parlay-title">🎲 Triple Threat (3-Leg)</div>
+      <div class="parlay-badge">Avg EDGE: 7.8/100</div>
+    </div>
+    <div class="parlay-pick"><span class="parlay-pick-name">LeBron James</span><span class="parlay-pick-desc">Over 25.5 Points</span></div>
+    <div class="parlay-pick"><span class="parlay-pick-name">Anthony Davis</span><span class="parlay-pick-desc">Over 12.5 Rebounds</span></div>
+    <div class="parlay-pick"><span class="parlay-pick-name">Stephen Curry</span><span class="parlay-pick-desc">Over 4.5 Threes</span></div>
+    <div class="parlay-reasoning">💡 Diversified across games | Top-3 picks balanced risk vs reward</div>
+    <div class="parlay-meta">
+      <span>Combined prob: 59.9%</span>
+      <span>Avg edge: +11.1%</span>
+    </div>
+  </div>
+
+  <!-- 4-Leg -->
+  <div class="parlay-card">
+    <div class="parlay-header">
+      <div class="parlay-title">🎲 Quad Stack (4-Leg)</div>
+      <div class="parlay-badge">Avg EDGE: 7.2/100</div>
+    </div>
+    <div class="parlay-pick"><span class="parlay-pick-name">LeBron James</span><span class="parlay-pick-desc">Over 25.5 Points</span></div>
+    <div class="parlay-pick"><span class="parlay-pick-name">Anthony Davis</span><span class="parlay-pick-desc">Over 12.5 Rebounds</span></div>
+    <div class="parlay-pick"><span class="parlay-pick-name">Stephen Curry</span><span class="parlay-pick-desc">Over 4.5 Threes</span></div>
+    <div class="parlay-pick"><span class="parlay-pick-name">Nikola Jokic</span><span class="parlay-pick-desc">Over 8.5 Assists</span></div>
+    <div class="parlay-reasoning">💡 Aggressive 4-leg for elevated payout | All legs 5%+ edge</div>
+    <div class="parlay-meta">
+      <span>Combined prob: 50.9%</span>
+      <span>Avg edge: +10.4%</span>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SECTION 3: Color Palette Reference
+       ════════════════════════════════════════════════════ -->
+  <div class="section-label">Section 3 — Color Palette</div>
+  <div class="row" style="margin-bottom:24px;">
+    <div class="col" style="background:#14192b;border-radius:6px;padding:12px;border-left:4px solid #ff5e00;">
+      <div style="font-size:0.75rem;color:#8a9bb8;">Primary Accent</div>
+      <div style="color:#ff5e00;font-weight:700;">#ff5e00 — Neon Orange</div>
+    </div>
+    <div class="col" style="background:#14192b;border-radius:6px;padding:12px;border-left:4px solid #00c8ff;">
+      <div style="font-size:0.75rem;color:#8a9bb8;">Secondary</div>
+      <div style="color:#00c8ff;font-weight:700;">#00c8ff — Quantum Cyan</div>
+    </div>
+    <div class="col" style="background:#14192b;border-radius:6px;padding:12px;border-left:4px solid #00ff9d;">
+      <div style="font-size:0.75rem;color:#8a9bb8;">Success</div>
+      <div style="color:#00ff9d;font-weight:700;">#00ff9d — Electric Green</div>
+    </div>
+    <div class="col" style="background:#14192b;border-radius:6px;padding:12px;border-left:4px solid #c800ff;">
+      <div style="font-size:0.75rem;color:#8a9bb8;">Tertiary</div>
+      <div style="color:#c800ff;font-weight:700;">#c800ff — Neon Purple</div>
+    </div>
+  </div>
+
+</body>
+</html>

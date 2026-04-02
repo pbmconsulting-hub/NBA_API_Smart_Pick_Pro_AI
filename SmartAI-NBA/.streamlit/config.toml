@@ -1,0 +1,22 @@
+# ============================================================
+# Streamlit Configuration — SmartBetPro NBA
+# Forces native dark mode, eliminates white flash on load,
+# and sets the "Quantum Institutional" colour palette.
+# ============================================================
+
+[theme]
+primaryColor = "#00f0ff"
+backgroundColor = "#070A13"
+secondaryBackgroundColor = "#0F172A"
+textColor = "#c8d8f0"
+font = "sans serif"
+
+[server]
+headless = true
+maxMessageSize = 1000
+
+[browser]
+gatherUsageStats = false
+
+[ui]
+hideTopBar = true
