@@ -1885,6 +1885,8 @@ def _fetch_single_game_box_scores(
         Dict mapping SQL table names to DataFrames ready for insertion.
     """
     results: dict[str, pd.DataFrame] = {}
+    # Each worker writes to a unique key, so the lock only protects the
+    # dict from concurrent mutation — not from key-level races.
     results_lock = threading.Lock()
 
     # --- Box Score Advanced ---
@@ -2106,6 +2108,9 @@ def _fetch_single_game_box_scores(
             logger.debug("BoxScoreMatchupsV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
 
     # Fetch all 5 box-score types concurrently for this game.
+    # The global rate limiter staggers request starts (~0.6 s apart), but
+    # network I/O overlaps so total wall-time is still much less than
+    # issuing 5 requests sequentially.
     with ThreadPoolExecutor(max_workers=_BOX_SCORE_TYPE_WORKERS) as pool:
         futs = [
             pool.submit(_fetch_advanced),
@@ -2114,8 +2119,8 @@ def _fetch_single_game_box_scores(
             pool.submit(_fetch_tracking),
             pool.submit(_fetch_matchups),
         ]
-        for f in futs:
-            f.result()  # Wait for all to complete; exceptions are handled inside.
+        for f in as_completed(futs):
+            f.result()  # Propagate unexpected errors; expected ones handled inside.
 
     return results
 
