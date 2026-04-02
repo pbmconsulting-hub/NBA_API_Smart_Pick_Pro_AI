@@ -511,6 +511,583 @@ def get_defense_vs_position(team_abbreviation: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Additional data endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/standings")
+def get_standings() -> dict:
+    """Return all standings rows."""
+    logger.info("GET /api/standings")
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT s.*, t.abbreviation, t.team_name "
+            "FROM Standings s "
+            "LEFT JOIN Teams t ON s.team_id = t.team_id "
+            "ORDER BY s.conference, s.playoff_rank"
+        ).fetchall()
+        return {"standings": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching standings.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/league-leaders")
+def get_league_leaders() -> dict:
+    """Return league leaders."""
+    logger.info("GET /api/league-leaders")
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT ll.*, p.full_name, p.position, p.team_abbreviation "
+            "FROM League_Leaders ll "
+            "LEFT JOIN Players p ON ll.player_id = p.player_id "
+            "ORDER BY ll.rank "
+            "LIMIT 100"
+        ).fetchall()
+        return {"leaders": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching league leaders.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/bio")
+def get_player_bio(player_id: int) -> dict:
+    """Return player bio information."""
+    logger.info("GET /api/players/%d/bio", player_id)
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM Player_Bio WHERE player_id = ?",
+            (player_id,),
+        ).fetchone()
+        if row is None:
+            # Fallback to Common_Player_Info
+            row = conn.execute(
+                "SELECT * FROM Common_Player_Info WHERE person_id = ?",
+                (player_id,),
+            ).fetchone()
+        return {"bio": dict(row) if row else {}}
+    except Exception as exc:
+        logger.exception("Error fetching bio for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/career")
+def get_player_career(player_id: int) -> dict:
+    """Return player career stats."""
+    logger.info("GET /api/players/%d/career", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Player_Career_Stats WHERE player_id = ? "
+            "ORDER BY season_id DESC",
+            (player_id,),
+        ).fetchall()
+        return {"career": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching career stats for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/awards")
+def get_player_awards(player_id: int) -> dict:
+    """Return player awards."""
+    logger.info("GET /api/players/%d/awards", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Player_Awards WHERE person_id = ? "
+            "ORDER BY season DESC",
+            (player_id,),
+        ).fetchall()
+        return {"awards": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching awards for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/advanced")
+def get_player_advanced(player_id: int) -> dict:
+    """Return advanced box score stats for a player."""
+    logger.info("GET /api/players/%d/advanced", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT bsa.*, g.game_date, g.matchup "
+            "FROM Box_Score_Advanced bsa "
+            "JOIN Games g ON bsa.game_id = g.game_id "
+            "WHERE bsa.person_id = ? "
+            "ORDER BY g.game_date DESC "
+            "LIMIT 20",
+            (player_id,),
+        ).fetchall()
+        return {"advanced": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching advanced stats for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/shot-chart")
+def get_player_shot_chart(player_id: int) -> dict:
+    """Return shot chart data for a player."""
+    logger.info("GET /api/players/%d/shot-chart", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Shot_Chart WHERE player_id = ? "
+            "ORDER BY game_date DESC "
+            "LIMIT 500",
+            (player_id,),
+        ).fetchall()
+        return {"shots": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching shot chart for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/tracking")
+def get_player_tracking(player_id: int) -> dict:
+    """Return player tracking stats."""
+    logger.info("GET /api/players/%d/tracking", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT pts.*, g.game_date, g.matchup "
+            "FROM Player_Tracking_Stats pts "
+            "JOIN Games g ON pts.game_id = g.game_id "
+            "WHERE pts.person_id = ? "
+            "ORDER BY g.game_date DESC "
+            "LIMIT 20",
+            (player_id,),
+        ).fetchall()
+        return {"tracking": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching tracking stats for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/clutch")
+def get_player_clutch(player_id: int) -> dict:
+    """Return player clutch stats."""
+    logger.info("GET /api/players/%d/clutch", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Player_Clutch_Stats WHERE player_id = ? "
+            "ORDER BY season DESC",
+            (player_id,),
+        ).fetchall()
+        return {"clutch": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching clutch stats for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/hustle")
+def get_player_hustle(player_id: int) -> dict:
+    """Return player hustle stats."""
+    logger.info("GET /api/players/%d/hustle", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Player_Hustle_Stats WHERE player_id = ? "
+            "ORDER BY season DESC",
+            (player_id,),
+        ).fetchall()
+        return {"hustle": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching hustle stats for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/scoring")
+def get_player_scoring(player_id: int) -> dict:
+    """Return scoring box score stats for a player."""
+    logger.info("GET /api/players/%d/scoring", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT bss.*, g.game_date, g.matchup "
+            "FROM Box_Score_Scoring bss "
+            "JOIN Games g ON bss.game_id = g.game_id "
+            "WHERE bss.person_id = ? "
+            "ORDER BY g.game_date DESC "
+            "LIMIT 20",
+            (player_id,),
+        ).fetchall()
+        return {"scoring": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching scoring stats for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/usage")
+def get_player_usage(player_id: int) -> dict:
+    """Return usage box score stats for a player."""
+    logger.info("GET /api/players/%d/usage", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT bsu.*, g.game_date, g.matchup "
+            "FROM Box_Score_Usage bsu "
+            "JOIN Games g ON bsu.game_id = g.game_id "
+            "WHERE bsu.person_id = ? "
+            "ORDER BY g.game_date DESC "
+            "LIMIT 20",
+            (player_id,),
+        ).fetchall()
+        return {"usage": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching usage stats for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/teams/{team_id}/details")
+def get_team_details(team_id: int) -> dict:
+    """Return detailed team information."""
+    logger.info("GET /api/teams/%d/details", team_id)
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM Team_Details WHERE team_id = ?",
+            (team_id,),
+        ).fetchone()
+        return {"details": dict(row) if row else {}}
+    except Exception as exc:
+        logger.exception("Error fetching details for team %d.", team_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/teams/{team_id}/clutch")
+def get_team_clutch(team_id: int) -> dict:
+    """Return team clutch stats."""
+    logger.info("GET /api/teams/%d/clutch", team_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Team_Clutch_Stats WHERE team_id = ? "
+            "ORDER BY season DESC",
+            (team_id,),
+        ).fetchall()
+        return {"clutch": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching clutch stats for team %d.", team_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/teams/{team_id}/hustle")
+def get_team_hustle(team_id: int) -> dict:
+    """Return team hustle stats."""
+    logger.info("GET /api/teams/%d/hustle", team_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Team_Hustle_Stats WHERE team_id = ? "
+            "ORDER BY season DESC",
+            (team_id,),
+        ).fetchall()
+        return {"hustle": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching hustle stats for team %d.", team_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/teams/{team_id}/estimated-metrics")
+def get_team_estimated_metrics(team_id: int) -> dict:
+    """Return team estimated metrics."""
+    logger.info("GET /api/teams/%d/estimated-metrics", team_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Team_Estimated_Metrics WHERE team_id = ? "
+            "ORDER BY season DESC",
+            (team_id,),
+        ).fetchall()
+        return {"metrics": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching estimated metrics for team %d.", team_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/teams/{team_id}/synergy")
+def get_team_synergy(team_id: int) -> dict:
+    """Return synergy play types for a team."""
+    logger.info("GET /api/teams/%d/synergy", team_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Synergy_Play_Types WHERE team_id = ? "
+            "ORDER BY season_id DESC, play_type",
+            (team_id,),
+        ).fetchall()
+        return {"synergy": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching synergy data for team %d.", team_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/games/{game_id}/play-by-play")
+def get_play_by_play(game_id: str) -> dict:
+    """Return play-by-play data for a game."""
+    logger.info("GET /api/games/%s/play-by-play", game_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Play_By_Play WHERE game_id = ? "
+            "ORDER BY period, action_number",
+            (game_id,),
+        ).fetchall()
+        return {"game_id": game_id, "plays": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching play-by-play for game %s.", game_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/games/{game_id}/win-probability")
+def get_win_probability(game_id: str) -> dict:
+    """Return win probability data for a game."""
+    logger.info("GET /api/games/%s/win-probability", game_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Win_Probability_PBP WHERE game_id = ? "
+            "ORDER BY event_num",
+            (game_id,),
+        ).fetchall()
+        return {"game_id": game_id, "probabilities": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching win probability for game %s.", game_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/games/{game_id}/rotation")
+def get_game_rotation(game_id: str) -> dict:
+    """Return rotation data for a game."""
+    logger.info("GET /api/games/%s/rotation", game_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT gr.*, p.full_name, t.abbreviation AS team_abbrev "
+            "FROM Game_Rotation gr "
+            "LEFT JOIN Players p ON gr.person_id = p.player_id "
+            "LEFT JOIN Teams t ON gr.team_id = t.team_id "
+            "WHERE gr.game_id = ? "
+            "ORDER BY gr.team_id, gr.in_time_real",
+            (game_id,),
+        ).fetchall()
+        return {"game_id": game_id, "rotations": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching rotation for game %s.", game_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/games/{game_id}/box-score")
+def get_game_box_score(game_id: str) -> dict:
+    """Return combined box score data for a game."""
+    logger.info("GET /api/games/%s/box-score", game_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT pgl.*, p.full_name, p.position, p.team_abbreviation "
+            "FROM Player_Game_Logs pgl "
+            "JOIN Players p ON pgl.player_id = p.player_id "
+            "WHERE pgl.game_id = ? "
+            "ORDER BY p.team_abbreviation, pgl.pts DESC",
+            (game_id,),
+        ).fetchall()
+        return {"game_id": game_id, "players": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching box score for game %s.", game_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/draft-history")
+def get_draft_history() -> dict:
+    """Return draft history."""
+    logger.info("GET /api/draft-history")
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT dh.*, p.full_name "
+            "FROM Draft_History dh "
+            "LEFT JOIN Players p ON dh.person_id = p.player_id "
+            "ORDER BY dh.season DESC, dh.overall_pick"
+        ).fetchall()
+        return {"drafts": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching draft history.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/lineups")
+def get_lineups() -> dict:
+    """Return league lineups."""
+    logger.info("GET /api/lineups")
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM League_Lineups "
+            "ORDER BY season DESC, plus_minus DESC "
+            "LIMIT 100"
+        ).fetchall()
+        return {"lineups": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching lineups.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/league-dash/players")
+def get_league_dash_players() -> dict:
+    """Return league dashboard player stats."""
+    logger.info("GET /api/league-dash/players")
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT ldps.*, p.full_name, p.position "
+            "FROM League_Dash_Player_Stats ldps "
+            "JOIN Players p ON ldps.player_id = p.player_id "
+            "ORDER BY ldps.pts DESC "
+            "LIMIT 200"
+        ).fetchall()
+        return {"players": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching league dash player stats.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/league-dash/teams")
+def get_league_dash_teams() -> dict:
+    """Return league dashboard team stats."""
+    logger.info("GET /api/league-dash/teams")
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT ldts.*, t.abbreviation, t.team_name "
+            "FROM League_Dash_Team_Stats ldts "
+            "JOIN Teams t ON ldts.team_id = t.team_id "
+            "ORDER BY ldts.w_pct DESC"
+        ).fetchall()
+        return {"teams": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching league dash team stats.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/games/recent")
+def get_recent_games() -> dict:
+    """Return the most recent games."""
+    logger.info("GET /api/games/recent")
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Games "
+            "WHERE home_score IS NOT NULL "
+            "ORDER BY game_date DESC "
+            "LIMIT 50"
+        ).fetchall()
+        return {"games": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching recent games.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/players/{player_id}/matchups")
+def get_player_matchups(player_id: int) -> dict:
+    """Return matchup data for a player (offensive)."""
+    logger.info("GET /api/players/%d/matchups", player_id)
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT bsm.*, g.game_date, g.matchup AS game_matchup, "
+            "p.full_name AS defender_name "
+            "FROM Box_Score_Matchups bsm "
+            "JOIN Games g ON bsm.game_id = g.game_id "
+            "LEFT JOIN Players p ON bsm.person_id_def = p.player_id "
+            "WHERE bsm.person_id_off = ? "
+            "ORDER BY g.game_date DESC, bsm.matchup_min_sort DESC "
+            "LIMIT 50",
+            (player_id,),
+        ).fetchall()
+        return {"matchups": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching matchups for player %d.", player_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/schedule")
+def get_schedule() -> dict:
+    """Return schedule data."""
+    logger.info("GET /api/schedule")
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM Schedule ORDER BY game_date DESC LIMIT 100"
+        ).fetchall()
+        return {"schedule": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Error fetching schedule.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
