@@ -119,6 +119,9 @@ _TEAM_CONFERENCE_DIVISION: dict[str, tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 
 _MAX_RETRIES = 3
+_MAX_RETRIES_PER_PLAYER = 5          # More retries for per-player endpoints.
+_PER_PLAYER_TIMEOUT = 60             # Seconds — higher for slow per-player calls.
+_PER_GAME_TIMEOUT = 60               # Seconds — higher for per-game box-score calls.
 
 
 def _call_with_retries(api_callable, description="API call", max_retries=_MAX_RETRIES):
@@ -146,7 +149,7 @@ def _call_with_retries(api_callable, description="API call", max_retries=_MAX_RE
         except Exception as exc:
             last_exc = exc
             if attempt < max_retries:
-                delay = 2 * attempt  # linear back-off: 2 s, 4 s
+                delay = min(2 ** attempt, 30)  # exponential back-off: 2, 4, 8, 16, … capped at 30 s
                 logger.warning(
                     "%s failed (attempt %d/%d): %s — retrying in %ds …",
                     description, attempt, max_retries, exc, delay,
@@ -1611,17 +1614,19 @@ def populate_player_career_stats(
 
     for i, pid in enumerate(player_ids):
         try:
-            time.sleep(1)  # Rate limit — ~1 req/sec for per-player endpoints.
+            time.sleep(2)  # Rate limit — avoid 429 / throttling.
             df = _call_with_retries(
                 lambda pid=pid: PlayerCareerStats(
                     player_id=pid,
+                    timeout=_PER_PLAYER_TIMEOUT,
                 ).get_data_frames()[0],
                 description=f"PlayerCareerStats(player={pid})",
+                max_retries=_MAX_RETRIES_PER_PLAYER,
             )
         except Exception:
             logger.warning(
                 "Failed to fetch career stats for player %d after %d attempts — skipping.",
-                pid, _MAX_RETRIES,
+                pid, _MAX_RETRIES_PER_PLAYER,
             )
             continue
 
@@ -1686,7 +1691,7 @@ def populate_shot_chart(
 
     for i, pid in enumerate(player_ids):
         try:
-            time.sleep(1)
+            time.sleep(2)
             df = _call_with_retries(
                 lambda pid=pid: ShotChartDetail(
                     team_id=0,
@@ -1694,13 +1699,15 @@ def populate_shot_chart(
                     season_nullable=season,
                     season_type_all_star="Regular Season",
                     context_measure_simple="FGA",
+                    timeout=_PER_PLAYER_TIMEOUT,
                 ).get_data_frames()[0],
                 description=f"ShotChartDetail(player={pid})",
+                max_retries=_MAX_RETRIES_PER_PLAYER,
             )
         except Exception:
             logger.warning(
                 "Failed to fetch shot chart for player %d after %d attempts — skipping.",
-                pid, _MAX_RETRIES,
+                pid, _MAX_RETRIES_PER_PLAYER,
             )
             continue
 
@@ -1832,7 +1839,7 @@ def _fetch_single_game_box_scores(
     try:
         time.sleep(1)
         df = _call_with_retries(
-            lambda: BoxScoreAdvancedV3(game_id=game_id).get_data_frames()[0],
+            lambda: BoxScoreAdvancedV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
             description=f"BoxScoreAdvancedV3(game={game_id})",
         )
         if not df.empty:
@@ -1874,7 +1881,7 @@ def _fetch_single_game_box_scores(
     try:
         time.sleep(1)
         df = _call_with_retries(
-            lambda: BoxScoreScoringV3(game_id=game_id).get_data_frames()[0],
+            lambda: BoxScoreScoringV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
             description=f"BoxScoreScoringV3(game={game_id})",
         )
         if not df.empty:
@@ -1910,7 +1917,7 @@ def _fetch_single_game_box_scores(
     try:
         time.sleep(1)
         df = _call_with_retries(
-            lambda: BoxScoreUsageV3(game_id=game_id).get_data_frames()[0],
+            lambda: BoxScoreUsageV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
             description=f"BoxScoreUsageV3(game={game_id})",
         )
         if not df.empty:
@@ -1949,7 +1956,7 @@ def _fetch_single_game_box_scores(
     try:
         time.sleep(1)
         df = _call_with_retries(
-            lambda: BoxScorePlayerTrackV3(game_id=game_id).get_data_frames()[0],
+            lambda: BoxScorePlayerTrackV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
             description=f"BoxScorePlayerTrackV3(game={game_id})",
         )
         if not df.empty:
@@ -1991,7 +1998,7 @@ def _fetch_single_game_box_scores(
     try:
         time.sleep(1)
         df = _call_with_retries(
-            lambda: BoxScoreMatchupsV3(game_id=game_id).get_data_frames()[0],
+            lambda: BoxScoreMatchupsV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
             description=f"BoxScoreMatchupsV3(game={game_id})",
         )
         if not df.empty:
