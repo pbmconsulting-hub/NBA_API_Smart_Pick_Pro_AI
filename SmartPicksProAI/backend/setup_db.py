@@ -887,25 +887,6 @@ CREATE TABLE IF NOT EXISTS Draft_History (
 );
 """
 
-CREATE_PLAYER_AWARDS = """
-CREATE TABLE IF NOT EXISTS Player_Awards (
-    award_id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    person_id      INTEGER NOT NULL REFERENCES Players(player_id),
-    first_name     TEXT,
-    last_name      TEXT,
-    team           TEXT,
-    description    TEXT,
-    all_nba_team_number INTEGER,
-    season         TEXT,
-    month          TEXT,
-    week           TEXT,
-    conference     TEXT,
-    type           TEXT,
-    subtype1       TEXT,
-    subtype2       TEXT,
-    subtype3       TEXT
-);
-"""
 
 CREATE_SYNERGY_PLAY_TYPES = """
 CREATE TABLE IF NOT EXISTS Synergy_Play_Types (
@@ -1290,7 +1271,6 @@ def create_tables(db_path: str = DB_PATH) -> None:
         logger.info("Creating context/historical tables …")
         cursor.execute(CREATE_GAME_ROTATION)
         cursor.execute(CREATE_DRAFT_HISTORY)
-        cursor.execute(CREATE_PLAYER_AWARDS)
         cursor.execute(CREATE_SYNERGY_PLAY_TYPES)
         cursor.execute(CREATE_LEAGUE_LINEUPS)
         cursor.execute(CREATE_LEAGUE_LEADERS)
@@ -1460,10 +1440,6 @@ def create_tables(db_path: str = DB_PATH) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_rotation_person "
             "ON Game_Rotation (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_awards_person "
-            "ON Player_Awards (person_id)"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_synergy_team "

@@ -10,7 +10,7 @@ Pandas, and loads it into the SQLite tables defined in setup_db.py.
 Also seeds the Teams table from static data, populates Team_Game_Stats from
 team-level game logs, loads Team_Roster / player positions via the
 CommonTeamRoster endpoint, and populates advanced analytics tables including
-career stats, awards, clutch, hustle, shot chart, tracking, scoring, usage,
+career stats, clutch, hustle, shot chart, tracking, scoring, usage,
 matchups, bio, estimated metrics, league dashboards, and league leaders.
 
 Run this script exactly once to establish the historical baseline:
@@ -39,7 +39,6 @@ from nba_api.stats.endpoints import (
     LeagueHustleStatsTeam,
     LeagueLeaders,
     LeagueStandingsV3,
-    PlayerAwards,
     PlayerCareerStats,
     PlayerEstimatedMetrics,
     ShotChartDetail,
@@ -1554,71 +1553,6 @@ def populate_player_career_stats(
     logger.info("Player_Career_Stats: inserted %d rows.", len(result))
 
 
-def populate_player_awards(
-    conn: sqlite3.Connection,
-) -> None:
-    """Fetch and load awards for all active players.
-
-    Iterates over every player in the Players table and calls
-    :class:`PlayerAwards` for each.
-
-    Args:
-        conn: Open SQLite connection.
-    """
-    player_ids = pd.read_sql(
-        "SELECT DISTINCT player_id FROM Players WHERE is_active = 1",
-        conn,
-    )["player_id"].tolist()
-
-    if not player_ids:
-        logger.info("Player_Awards: no active players found.")
-        return
-
-    logger.info("Fetching awards for %d players …", len(player_ids))
-    all_rows: list[dict] = []
-
-    for i, pid in enumerate(player_ids):
-        try:
-            time.sleep(1)
-            ep = PlayerAwards(player_id=pid)
-            df = ep.get_data_frames()[0]
-        except Exception:
-            logger.warning("Failed to fetch awards for player %d.", pid)
-            continue
-
-        if df.empty:
-            continue
-
-        for _, row in df.iterrows():
-            all_rows.append({
-                "person_id": int(pid),
-                "first_name": row.get("FIRST_NAME", ""),
-                "last_name": row.get("LAST_NAME", ""),
-                "team": row.get("TEAM", ""),
-                "description": row.get("DESCRIPTION", ""),
-                "all_nba_team_number": row.get("ALL_NBA_TEAM_NUMBER"),
-                "season": row.get("SEASON", ""),
-                "month": row.get("MONTH", ""),
-                "week": row.get("WEEK", ""),
-                "conference": row.get("CONFERENCE", ""),
-                "type": row.get("TYPE", ""),
-                "subtype1": row.get("SUBTYPE1", ""),
-                "subtype2": row.get("SUBTYPE2", ""),
-                "subtype3": row.get("SUBTYPE3", ""),
-            })
-
-        if (i + 1) % 50 == 0:
-            logger.info("  … awards: %d / %d players processed.", i + 1, len(player_ids))
-
-    if not all_rows:
-        logger.info("Player_Awards: no awards data retrieved.")
-        return
-
-    result = pd.DataFrame(all_rows)
-    conn.execute("DELETE FROM Player_Awards")
-    result.to_sql("Player_Awards", conn, if_exists="append", index=False)
-    logger.info("Player_Awards: inserted %d rows.", len(result))
-
 
 def populate_shot_chart(
     conn: sqlite3.Connection, season: str = SEASON
@@ -2000,7 +1934,7 @@ def run_initial_pull(db_path: str = DB_PATH, season: str = SEASON) -> None:
     7. Computes Defense_Vs_Position multipliers from the loaded data.
     8. Populates season-level dashboards (clutch, hustle, bio, estimated
        metrics, league dash stats, league leaders, standings).
-    9. Populates per-player data (career stats, awards, shot chart).
+    9. Populates per-player data (career stats, shot chart).
     10. Populates per-game advanced box scores (advanced, scoring, usage,
         tracking, matchups).
 
@@ -2080,8 +2014,6 @@ def run_initial_pull(db_path: str = DB_PATH, season: str = SEASON) -> None:
         # --- Per-player data (rate-limited: 1 req / player) ---
         logger.info("--- Populating per-player tables ---")
         populate_player_career_stats(conn, season)
-        conn.commit()
-        populate_player_awards(conn)
         conn.commit()
         populate_shot_chart(conn, season)
         conn.commit()

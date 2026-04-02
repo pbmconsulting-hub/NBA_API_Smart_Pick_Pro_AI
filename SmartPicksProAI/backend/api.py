@@ -599,24 +599,6 @@ def get_player_career(player_id: int) -> dict:
         conn.close()
 
 
-@app.get("/api/players/{player_id}/awards")
-def get_player_awards(player_id: int) -> dict:
-    """Return player awards."""
-    logger.info("GET /api/players/%d/awards", player_id)
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM Player_Awards WHERE person_id = ? "
-            "ORDER BY season DESC",
-            (player_id,),
-        ).fetchall()
-        return {"awards": [dict(r) for r in rows]}
-    except Exception as exc:
-        logger.exception("Error fetching awards for player %d.", player_id)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        conn.close()
-
 
 @app.get("/api/players/{player_id}/advanced")
 def get_player_advanced(player_id: int) -> dict:

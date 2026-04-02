@@ -24,7 +24,6 @@ Usage::
         get_league_leaders,
         get_player_bio,
         get_player_career,
-        get_player_awards,
         get_player_advanced,
         get_player_shot_chart,
         get_player_tracking,
@@ -333,29 +332,6 @@ def get_player_career(player_id: int) -> list[dict]:
         logger.error("Failed to fetch career for player %d: %s", player_id, exc)
         return []
 
-
-@st.cache_data(ttl=3600)
-def get_player_awards(player_id: int) -> list[dict]:
-    """Fetch a player's awards from the backend.
-
-    Calls ``GET /api/players/{player_id}/awards`` and returns the ``awards``
-    list.  Cached for 1 hour.
-
-    Args:
-        player_id: The NBA player ID.
-
-    Returns:
-        A list of award dicts, or an empty list on error.
-    """
-    try:
-        resp = requests.get(
-            f"{BASE_URL}/api/players/{player_id}/awards", timeout=15
-        )
-        resp.raise_for_status()
-        return resp.json().get("awards", [])
-    except Exception as exc:
-        logger.error("Failed to fetch awards for player %d: %s", player_id, exc)
-        return []
 
 
 @st.cache_data(ttl=3600)

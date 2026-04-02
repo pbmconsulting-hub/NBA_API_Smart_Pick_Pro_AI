@@ -32,7 +32,6 @@ from api_service import (
     get_lineups,
     get_play_by_play,
     get_player_advanced,
-    get_player_awards,
     get_player_bio,
     get_player_career,
     get_player_clutch,
@@ -864,7 +863,7 @@ elif current_page == "player_profile":
         # ── Detailed tabs ─────────────────────────────────────
         (p_t_last5, p_t_career, p_t_adv, p_t_scoring, p_t_usage,
          p_t_shots, p_t_tracking, p_t_clutch, p_t_hustle,
-         p_t_matchups, p_t_awards) = st.tabs([
+         p_t_matchups) = st.tabs([
             "📊 Last 5 Games",
             "📈 Career Stats",
             "🧠 Advanced",
@@ -875,7 +874,6 @@ elif current_page == "player_profile":
             "🔥 Clutch",
             "💪 Hustle",
             "⚔️ Matchups",
-            "🏅 Awards",
         ])
 
         with p_t_last5:
@@ -1051,17 +1049,6 @@ elif current_page == "player_profile":
                 ])
             else:
                 st.info("No matchup data.")
-
-        with p_t_awards:
-            st.caption("Career accolades — All-Star selections, All-NBA teams, Player of the Week/Month, and more.")
-            awards = get_player_awards(pid)
-            if awards:
-                _show_df(awards, [
-                    "season", "description", "type", "subtype1",
-                    "all_nba_team_number", "conference",
-                ])
-            else:
-                st.info("No awards data.")
 
 
 # ─────────────────────────────────────────────────────────────────────────
