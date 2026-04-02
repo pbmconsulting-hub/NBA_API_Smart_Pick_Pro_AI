@@ -499,7 +499,11 @@ def get_standings(progress_callback=None) -> list:
 
 def get_standings_from_nba_api(season: str | None = None) -> list:
     """Retrieve NBA standings (same DB source as get_standings)."""
-    return _etl.get_standings()
+    try:
+        return _etl.get_standings()
+    except Exception as exc:
+        _logger.warning("get_standings_from_nba_api failed: %s", exc)
+        return []
 
 
 def get_league_leaders(stat_category: str = "PTS",
@@ -851,7 +855,8 @@ class NBADataService:
         return get_team_stats(progress_callback=progress_callback)
 
     def get_injuries(self):
-        return _etl.get_injuries()
+        injuries = _etl.get_injuries()
+        return {"injuries": injuries, "source": "database"}
 
     def clear_caches(self):
         clear_caches()

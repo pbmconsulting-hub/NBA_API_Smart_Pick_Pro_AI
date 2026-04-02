@@ -569,19 +569,19 @@ class TestPlayerIntelligenceIntegration(unittest.TestCase):
 
     def test_get_player_game_logs_from_service_returns_list(self):
         from engine.player_intelligence import get_player_game_logs_from_service
-        with patch("data.nba_stats_service.get_player_game_logs", return_value=[{"PTS": 25}]):
+        with patch("data.nba_data_service.get_player_game_log", return_value=[{"PTS": 25}]):
             result = get_player_game_logs_from_service(2544)
         self.assertIsInstance(result, list)
 
     def test_get_player_game_logs_from_service_returns_empty_on_error(self):
         from engine.player_intelligence import get_player_game_logs_from_service
-        with patch("data.nba_stats_service.get_player_game_logs", side_effect=Exception("oops")):
+        with patch("data.nba_data_service.get_player_game_log", side_effect=Exception("oops")):
             result = get_player_game_logs_from_service(2544)
         self.assertEqual(result, [])
 
     def test_get_player_matchup_grade_returns_na_when_no_data(self):
         from engine.player_intelligence import get_player_matchup_grade
-        with patch("data.nba_stats_service.get_defensive_matchup_data", return_value=[]):
+        with patch("data.nba_data_service.get_defensive_ratings", return_value=[]):
             result = get_player_matchup_grade(2544, "BOS", "points")
         self.assertEqual(result["grade"], "N/A")
 
@@ -592,7 +592,7 @@ class TestPlayerIntelligenceIntegration(unittest.TestCase):
             {"TEAM_ABBREVIATION": "LAL", "DEFENSE_CATEGORY": "Overall", "D_PTS": 115.0},
             {"TEAM_ABBREVIATION": "PHX", "DEFENSE_CATEGORY": "Overall", "D_PTS": 105.0},
         ]
-        with patch("data.nba_stats_service.get_defensive_matchup_data", return_value=rows):
+        with patch("data.nba_data_service.get_defensive_ratings", return_value=rows):
             result = get_player_matchup_grade(2544, "LAL", "points")
         self.assertIn(result["grade"], ("A", "B", "C", "D", "N/A"))
         self.assertIn("label", result)
@@ -600,7 +600,7 @@ class TestPlayerIntelligenceIntegration(unittest.TestCase):
 
     def test_get_player_home_away_splits_returns_zeros_when_no_data(self):
         from engine.player_intelligence import get_player_home_away_splits
-        with patch("data.nba_stats_service.get_player_splits", return_value={}):
+        with patch("data.nba_data_service.get_player_shooting_splits", return_value={}):
             result = get_player_home_away_splits(2544)
         self.assertEqual(result["home_pts"], 0.0)
         self.assertEqual(result["away_pts"], 0.0)
@@ -615,7 +615,7 @@ class TestPlayerIntelligenceIntegration(unittest.TestCase):
             "last_5_games": [{"PTS": 30.0, "REB": 8.0, "AST": 9.0}],
             "last_10_games": [{"PTS": 27.0, "REB": 7.5, "AST": 8.3}],
         }
-        with patch("data.nba_stats_service.get_player_splits", return_value=splits_data):
+        with patch("data.nba_data_service.get_player_shooting_splits", return_value=splits_data):
             result = get_player_home_away_splits(2544)
         self.assertAlmostEqual(result["home_pts"], 28.5)
         self.assertAlmostEqual(result["away_pts"], 24.0)
@@ -630,27 +630,28 @@ class TestNbaDataServiceIntegration(unittest.TestCase):
     def test_get_standings_from_nba_api_returns_list(self):
         from data.nba_data_service import get_standings_from_nba_api
         standings = [{"team_abbreviation": "BOS", "wins": 60}]
-        with patch("data.nba_stats_service.get_league_standings", return_value=standings):
+        with patch("data.etl_data_service.get_standings", return_value=standings):
             result = get_standings_from_nba_api()
         self.assertEqual(result, standings)
 
     def test_get_standings_from_nba_api_returns_empty_on_error(self):
         from data.nba_data_service import get_standings_from_nba_api
-        with patch("data.nba_stats_service.get_league_standings", side_effect=Exception("fail")):
+        with patch("data.etl_data_service.get_standings", side_effect=Exception("fail")):
             result = get_standings_from_nba_api()
         self.assertEqual(result, [])
 
     def test_get_game_logs_from_nba_api_resolves_player(self):
         from data.nba_data_service import get_game_logs_from_nba_api
         logs = [{"PTS": 30, "REB": 8}]
-        with patch("data.player_profile_service.get_player_id", return_value=2544):
-            with patch("data.nba_stats_service.get_player_game_logs", return_value=logs):
+        player = {"player_id": 2544, "first_name": "LeBron", "last_name": "James"}
+        with patch("data.etl_data_service.get_player_by_name", return_value=player):
+            with patch("data.etl_data_service.get_player_game_logs", return_value=logs):
                 result = get_game_logs_from_nba_api("LeBron James")
         self.assertEqual(result, logs)
 
     def test_get_game_logs_from_nba_api_returns_empty_when_no_id(self):
         from data.nba_data_service import get_game_logs_from_nba_api
-        with patch("data.player_profile_service.get_player_id", return_value=None):
+        with patch("data.etl_data_service.get_player_by_name", return_value=None):
             result = get_game_logs_from_nba_api("Unknown Player")
         self.assertEqual(result, [])
 
@@ -661,7 +662,7 @@ class TestSimulationAdvancedStats(unittest.TestCase):
 
     def test_enrich_returns_default_when_no_data(self):
         from engine.simulation import enrich_simulation_with_advanced_stats
-        with patch("data.nba_stats_service.get_advanced_box_score", return_value={}):
+        with patch("data.nba_data_service.get_box_score_advanced", return_value={}):
             result = enrich_simulation_with_advanced_stats("bad_id", "LeBron James")
         self.assertFalse(result["available"])
         self.assertEqual(result["pace_factor"], 1.0)
@@ -676,7 +677,7 @@ class TestSimulationAdvancedStats(unittest.TestCase):
                 {"TEAM_ABBREVIATION": "LAL", "PACE": 102.0}
             ],
         }
-        with patch("data.nba_stats_service.get_advanced_box_score", return_value=box):
+        with patch("data.nba_data_service.get_box_score_advanced", return_value=box):
             result = enrich_simulation_with_advanced_stats("0022400001", "LeBron James")
         self.assertTrue(result["available"])
         self.assertAlmostEqual(result["efg_pct"], 0.55)
@@ -686,7 +687,7 @@ class TestSimulationAdvancedStats(unittest.TestCase):
 
     def test_enrich_returns_default_when_service_unavailable(self):
         from engine.simulation import enrich_simulation_with_advanced_stats
-        with patch("data.nba_stats_service.get_advanced_box_score",
+        with patch("data.nba_data_service.get_box_score_advanced",
                    side_effect=Exception("service down")):
             result = enrich_simulation_with_advanced_stats("bad_id", "Any Player")
         self.assertFalse(result["available"])
@@ -700,7 +701,7 @@ class TestSimulationAdvancedStats(unittest.TestCase):
             ],
             "team_stats": [],
         }
-        with patch("data.nba_stats_service.get_advanced_box_score", return_value=box):
+        with patch("data.nba_data_service.get_box_score_advanced", return_value=box):
             result = enrich_simulation_with_advanced_stats("0022400001", "LeBron James")
         self.assertFalse(result["available"])
 

@@ -496,13 +496,13 @@ class TestBoxScoresAndLineups:
 # ---------------------------------------------------------------------------
 
 class TestNbaDataServiceBdlIntegration:
-    """Verify nba_data_service routes to BDL when available."""
+    """Verify nba_data_service routes to ETL database."""
 
-    def test_nba_data_service_imports_bdl(self):
-        """nba_data_service should import bdl_bridge successfully."""
+    def test_nba_data_service_imports_etl(self):
+        """nba_data_service should import etl_data_service successfully."""
         import data.nba_data_service as nds
-        # The module should have _BDL_AVAILABLE defined
-        assert hasattr(nds, '_BDL_AVAILABLE')
+        # The module should use _etl for DB access
+        assert hasattr(nds, '_etl')
 
     def test_get_todays_games_callable(self):
         from data.nba_data_service import get_todays_games
