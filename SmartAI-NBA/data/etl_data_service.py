@@ -1,16 +1,20 @@
 """
 data/etl_data_service.py
 =========================
-Bridge between the ETL SQLite database (db/etl_data.db) and
-SmartAI-NBA's data layer.
+Comprehensive database bridge between the SmartPicksProAI SQLite database
+and SmartAI-NBA's data layer.
 
 All functions connect to the database read-only for queries and return
-plain Python dicts/lists.  No live API calls are made here — those happen
-only in scripts/initial_pull.py and scripts/data_updater.py.
+plain Python dicts/lists.  No live API calls are made — all data comes
+from the SmartPicksProAI ETL pipeline database.
 
-If the database does not exist yet (fresh install, before running
-initial_pull.py), every function degrades gracefully and returns an
-empty result so the rest of the app keeps working.
+Database resolution order:
+    1. ``SMARTPICKS_DB_PATH`` environment variable (if set and file exists)
+    2. ``../../SmartPicksProAI/backend/smartpicks.db`` (relative to this file)
+    3. ``db/etl_data.db`` (legacy fallback, relative to SmartAI-NBA root)
+
+If the database does not exist yet, every function degrades gracefully
+and returns an empty result so the rest of the app keeps working.
 """
 
 from __future__ import annotations
@@ -31,8 +35,36 @@ except ImportError:
 
 # ── DB path ───────────────────────────────────────────────────────────────────
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = _REPO_ROOT / "db" / "etl_data.db"
+_DATA_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _DATA_DIR.parent
+
+
+def _resolve_db_path() -> Path:
+    """Resolve the database path using env var → SmartPicksProAI → legacy."""
+    # 1. Environment variable override
+    env_path = os.environ.get("SMARTPICKS_DB_PATH")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+
+    # 2. SmartPicksProAI database (relative to the data/ directory)
+    smartpicks_path = (_DATA_DIR / ".." / ".." / "SmartPicksProAI" /
+                       "backend" / "smartpicks.db").resolve()
+    if smartpicks_path.exists():
+        return smartpicks_path
+
+    # 3. Legacy fallback
+    legacy_path = _REPO_ROOT / "db" / "etl_data.db"
+    if legacy_path.exists():
+        return legacy_path
+
+    # Return the preferred path even if it doesn't exist yet; _get_conn()
+    # will handle the missing-file case gracefully.
+    return smartpicks_path
+
+
+DB_PATH = _resolve_db_path()
 
 
 # ── Connection helper ─────────────────────────────────────────────────────────
@@ -464,6 +496,10 @@ def get_player_game_logs(player_id: int, limit: int | None = None) -> list[dict]
         conn.close()
 
 
+# Backward-compatible alias
+get_player_game_logs_from_etl = get_player_game_logs
+
+
 def get_player_last_n(player_id: int, n: int = 5) -> dict:
     """
     Return the last *n* games plus their averages.
@@ -511,57 +547,33 @@ def get_todays_games() -> list[dict]:
     """
     Return tonight's games from the Games table.
 
-    Falls back to nba_api.stats.endpoints.ScoreboardV2 if no games
-    are found for today's date in the DB.
+    Database-only — returns an empty list if no games are found for today.
     """
     today = datetime.date.today().strftime("%Y-%m-%d")
 
     conn = _get_conn()
-    db_games: list[dict] = []
-    if conn is not None:
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """SELECT game_id, game_date, matchup, home_score, away_score
+               FROM Games WHERE game_date = ?""",
+            (today,),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception:
+        # home_score/away_score may not exist in old DBs — fall back to basic columns
         try:
             rows = conn.execute(
-                """SELECT game_id, game_date, matchup, home_score, away_score
-                   FROM Games WHERE game_date = ?""",
+                "SELECT game_id, game_date, matchup FROM Games WHERE game_date = ?",
                 (today,),
             ).fetchall()
-            db_games = _rows_to_dicts(rows)
-        except Exception:
-            # home_score/away_score may not exist in old DBs — fall back to basic columns
-            try:
-                rows = conn.execute(
-                    "SELECT game_id, game_date, matchup FROM Games WHERE game_date = ?",
-                    (today,),
-                ).fetchall()
-                db_games = _rows_to_dicts(rows)
-            except Exception as exc:
-                _logger.warning("get_todays_games DB query failed: %s", exc)
-        finally:
-            conn.close()
-
-    if db_games:
-        return db_games
-
-    # Fallback: live nba_api call
-    try:
-        from nba_api.stats.endpoints import ScoreboardV2
-        import time
-        time.sleep(0.5)
-        sb = ScoreboardV2(game_date=today, timeout=15)
-        df = sb.get_data_frames()[0]
-        games = []
-        for _, row in df.iterrows():
-            games.append({
-                "game_id":   str(row.get("GAME_ID", "")),
-                "game_date": today,
-                "matchup":   f"{row.get('VISITOR_TEAM_ABBREVIATION','')} vs {row.get('HOME_TEAM_ABBREVIATION','')}",
-                "home_team": str(row.get("HOME_TEAM_ABBREVIATION", "")),
-                "away_team": str(row.get("VISITOR_TEAM_ABBREVIATION", "")),
-            })
-        return games
-    except Exception as exc:
-        _logger.warning("get_todays_games fallback (nba_api) failed: %s", exc)
-        return []
+            return _rows_to_dicts(rows)
+        except Exception as exc:
+            _logger.warning("get_todays_games DB query failed: %s", exc)
+            return []
+    finally:
+        conn.close()
 
 
 def get_players_for_game(game_id: str) -> list[dict]:
@@ -691,22 +703,38 @@ def refresh_data() -> dict:
     try:
         from scripts.data_updater import run_update
         return run_update()
+    except ImportError:
+        _logger.warning("refresh_data: data_updater module not available")
+        return {"new_games": 0, "new_logs": 0, "new_players": 0,
+                "error": "data_updater module not available"}
     except Exception as exc:
         _logger.error("refresh_data failed: %s", exc)
         return {"new_games": 0, "new_logs": 0, "new_players": 0, "error": str(exc)}
 
 
 def get_db_counts() -> dict:
-    """Return row counts for each table — useful for status display."""
+    """Return row counts for key tables — useful for status display."""
     conn = _get_conn()
     if conn is None:
-        return {"players": 0, "games": 0, "logs": 0}
+        return {"players": 0, "games": 0, "logs": 0, "teams": 0,
+                "standings": 0, "schedule": 0, "injuries": 0,
+                "defense_vs_position": 0, "league_leaders": 0,
+                "career_stats": 0, "player_bio": 0, "box_score_advanced": 0}
     # Table names are hardcoded constants — not user input — but use explicit
     # per-query strings (no interpolation) to satisfy static-analysis tooling.
     _table_queries: list[tuple[str, str]] = [
-        ("players", "SELECT COUNT(*) FROM Players"),
-        ("games",   "SELECT COUNT(*) FROM Games"),
-        ("logs",    "SELECT COUNT(*) FROM Player_Game_Logs"),
+        ("players",              "SELECT COUNT(*) FROM Players"),
+        ("games",                "SELECT COUNT(*) FROM Games"),
+        ("logs",                 "SELECT COUNT(*) FROM Player_Game_Logs"),
+        ("teams",                "SELECT COUNT(*) FROM Teams"),
+        ("standings",            "SELECT COUNT(*) FROM Standings"),
+        ("schedule",             "SELECT COUNT(*) FROM Schedule"),
+        ("injuries",             "SELECT COUNT(*) FROM Injury_Status"),
+        ("defense_vs_position",  "SELECT COUNT(*) FROM Defense_Vs_Position"),
+        ("league_leaders",       "SELECT COUNT(*) FROM League_Leaders"),
+        ("career_stats",         "SELECT COUNT(*) FROM Player_Career_Stats"),
+        ("player_bio",           "SELECT COUNT(*) FROM Player_Bio"),
+        ("box_score_advanced",   "SELECT COUNT(*) FROM Box_Score_Advanced"),
     ]
     try:
         counts: dict = {}
@@ -716,5 +744,384 @@ def get_db_counts() -> dict:
             except Exception:
                 counts[key] = 0
         return counts
+    finally:
+        conn.close()
+
+
+# ── New SmartPicksProAI table accessors ───────────────────────────────────────
+
+
+def get_standings() -> list[dict]:
+    """
+    Return all standings rows from the Standings table.
+
+    Each dict mirrors the Standings schema: season_id, team_id, conference,
+    wins, losses, win_pct, playoff_rank, and many situational records.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.*, t.abbreviation AS team_abbreviation, t.team_name
+            FROM Standings s
+            LEFT JOIN Teams t ON s.team_id = t.team_id
+            ORDER BY s.conference, s.playoff_rank
+            """
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_standings failed: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_teams() -> list[dict]:
+    """
+    Return all teams with pace/ortg/drtg from the Teams table.
+
+    Each dict has: team_id, abbreviation, team_name, conference, division,
+    pace, ortg, drtg.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT team_id, abbreviation, team_name, conference, division,
+                   pace, ortg, drtg
+            FROM Teams
+            ORDER BY team_name
+            """
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_teams failed: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_team_by_id(team_id: int) -> dict | None:
+    """Return a single team dict from the Teams table, or None if not found."""
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            """
+            SELECT team_id, abbreviation, team_name, conference, division,
+                   pace, ortg, drtg
+            FROM Teams
+            WHERE team_id = ?
+            """,
+            (int(team_id),),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception as exc:
+        _logger.warning("get_team_by_id(%s) failed: %s", team_id, exc)
+        return None
+    finally:
+        conn.close()
+
+
+def get_team_roster(team_id: int) -> list[dict]:
+    """
+    Return the roster for a team by joining Team_Roster with Players.
+
+    Each dict has: player_id, first_name, last_name, full_name, position,
+    team_abbreviation, is_two_way, is_g_league, effective_start_date.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT p.player_id, p.first_name, p.last_name, p.full_name,
+                   p.position, p.team_abbreviation,
+                   r.is_two_way, r.is_g_league, r.effective_start_date
+            FROM Team_Roster r
+            JOIN Players p ON r.player_id = p.player_id
+            WHERE r.team_id = ?
+            ORDER BY p.last_name, p.first_name
+            """,
+            (int(team_id),),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_team_roster(%s) failed: %s", team_id, exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_injuries() -> list[dict]:
+    """
+    Return recent injury reports from the Injury_Status table.
+
+    Joins with Players to include player names and team info.
+    Returns the most recent report per player, ordered by report_date DESC.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT i.player_id, i.team_id, i.report_date, i.status, i.reason,
+                   i.source, i.last_updated_ts,
+                   p.first_name, p.last_name, p.team_abbreviation, p.position
+            FROM Injury_Status i
+            JOIN Players p ON i.player_id = p.player_id
+            WHERE i.report_date = (
+                SELECT MAX(i2.report_date)
+                FROM Injury_Status i2
+                WHERE i2.player_id = i.player_id
+            )
+            ORDER BY i.report_date DESC
+            """
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_injuries failed: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_defense_vs_position(team_abbreviation: str) -> list[dict]:
+    """
+    Return defensive multipliers by position for a specific team.
+
+    Each dict has: team_abbreviation, season, pos, vs_pts_mult,
+    vs_reb_mult, vs_ast_mult, vs_stl_mult, vs_blk_mult, vs_3pm_mult.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT team_abbreviation, season, pos,
+                   vs_pts_mult, vs_reb_mult, vs_ast_mult,
+                   vs_stl_mult, vs_blk_mult, vs_3pm_mult
+            FROM Defense_Vs_Position
+            WHERE team_abbreviation = ?
+            ORDER BY season DESC, pos
+            """,
+            (str(team_abbreviation),),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_defense_vs_position(%r) failed: %s",
+                        team_abbreviation, exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_all_defense_vs_position() -> list[dict]:
+    """
+    Return all defensive-vs-position multipliers across every team.
+
+    Useful for building league-wide matchup models.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT team_abbreviation, season, pos,
+                   vs_pts_mult, vs_reb_mult, vs_ast_mult,
+                   vs_stl_mult, vs_blk_mult, vs_3pm_mult
+            FROM Defense_Vs_Position
+            ORDER BY team_abbreviation, season DESC, pos
+            """
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_all_defense_vs_position failed: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_league_leaders() -> list[dict]:
+    """
+    Return all rows from the League_Leaders table.
+
+    Each dict includes: season, player_id, rank, team, gp, min,
+    shooting splits, reb, ast, stl, blk, tov, pf, pts, eff,
+    ast_tov, stl_tov.  Joins with Players for names.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT ll.*, p.first_name, p.last_name
+            FROM League_Leaders ll
+            LEFT JOIN Players p ON ll.player_id = p.player_id
+            ORDER BY ll.season DESC, ll.rank
+            """
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_league_leaders failed: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_schedule() -> list[dict]:
+    """
+    Return all rows from the Schedule table.
+
+    Each dict mirrors the Schedule schema: game_id, game_date,
+    arena info, home/away team details, scores, etc.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM Schedule
+            ORDER BY game_date DESC, game_id
+            """
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_schedule failed: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_player_career(player_id: int) -> list[dict]:
+    """
+    Return career stats for a player from the Player_Career_Stats table.
+
+    Each dict represents one season: player_id, season_id, team_id,
+    team_abbreviation, player_age, gp, gs, min, and full shooting splits.
+    Ordered by season_id ascending.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM Player_Career_Stats
+            WHERE player_id = ?
+            ORDER BY season_id
+            """,
+            (int(player_id),),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_player_career(%s) failed: %s", player_id, exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_player_bio(player_id: int) -> dict | None:
+    """
+    Return biographical/draft info for a player from the Player_Bio table.
+
+    Returns a single dict with: player_id, player_name, team_id,
+    team_abbreviation, age, player_height, player_weight, college,
+    country, draft_year/round/number, gp, pts, reb, ast, and
+    advanced metrics (net_rating, oreb_pct, dreb_pct, usg_pct,
+    ts_pct, ast_pct).  Returns None if not found.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT * FROM Player_Bio WHERE player_id = ?",
+            (int(player_id),),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception as exc:
+        _logger.warning("get_player_bio(%s) failed: %s", player_id, exc)
+        return None
+    finally:
+        conn.close()
+
+
+def get_box_score_advanced(game_id: str) -> list[dict]:
+    """
+    Return advanced box-score stats for every player in a game.
+
+    Each dict includes: game_id, person_id, team_id, position,
+    off_rating, def_rating, net_rating, ast_pct, ts_pct, usg_pct,
+    pace, pie, and more.  Joins with Players for names.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT b.*, p.first_name, p.last_name
+            FROM Box_Score_Advanced b
+            LEFT JOIN Players p ON b.person_id = p.player_id
+            WHERE b.game_id = ?
+            ORDER BY b.team_id, b.person_id
+            """,
+            (str(game_id),),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_box_score_advanced(%r) failed: %s", game_id, exc)
+        return []
+    finally:
+        conn.close()
+
+
+def get_recent_games(limit: int = 20) -> list[dict]:
+    """
+    Return the most recent games from the Games table.
+
+    Parameters
+    ----------
+    limit : int
+        Maximum number of games to return (default 20).
+
+    Each dict has: game_id, game_date, season, home_team_id,
+    away_team_id, home_abbrev, away_abbrev, matchup, home_score,
+    away_score.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT game_id, game_date, season,
+                   home_team_id, away_team_id,
+                   home_abbrev, away_abbrev,
+                   matchup, home_score, away_score
+            FROM Games
+            ORDER BY game_date DESC, game_id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+    except Exception as exc:
+        _logger.warning("get_recent_games failed: %s", exc)
+        return []
     finally:
         conn.close()
