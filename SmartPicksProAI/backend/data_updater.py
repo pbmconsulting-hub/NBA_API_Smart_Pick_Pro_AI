@@ -137,16 +137,7 @@ def _upsert_players(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
         conn: Open SQLite connection.
     """
     players = initial_pull.build_players_df(raw)
-    if players.empty:
-        return
-
-    cursor = conn.cursor()
-    cols = list(players.columns)
-    placeholders = ", ".join("?" for _ in cols)
-    col_names = ", ".join(cols)
-    sql = f"INSERT OR REPLACE INTO Players ({col_names}) VALUES ({placeholders})"
-    cursor.executemany(sql, players.itertuples(index=False, name=None))
-    logger.info("Players: upserted %d rows.", len(players))
+    upsert_dataframe(players, "Players", conn)
 
 
 def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
@@ -224,11 +215,7 @@ def _upsert_logs(raw: pd.DataFrame, conn: sqlite3.Connection) -> int:
     logs = initial_pull.build_logs_df(raw)
 
     existing = pd.read_sql("SELECT player_id, game_id FROM Player_Game_Logs", conn)
-    if existing.empty:
-        new_rows = logs
-    else:
-        merged = logs.merge(existing, on=["player_id", "game_id"], how="left", indicator=True)
-        new_rows = logs[merged["_merge"] == "left_only"].copy()
+    new_rows = get_new_rows(logs, existing, on_cols=["player_id", "game_id"])
 
     if new_rows.empty:
         logger.info("Player_Game_Logs: no new rows to insert.")
@@ -290,7 +277,7 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
             _fetch_scoreboard,
             description=f"ScoreboardV3({today_str})",
         )
-    except Exception:
+    except Exception:  # Broad: _call_with_retries re-raises whatever the NBA API raises.
         logger.exception(
             "Failed to fetch ScoreboardV3 for %s after %d attempts.",
             today_str, initial_pull._MAX_RETRIES,
