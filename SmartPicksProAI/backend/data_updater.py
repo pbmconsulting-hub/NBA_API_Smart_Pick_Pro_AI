@@ -20,7 +20,6 @@ Usage::
 
 import logging
 import sqlite3
-import time
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -127,7 +126,7 @@ def _fetch_logs_for_range(date_from: date, date_to: date) -> pd.DataFrame:
         date_from_nullable=str_from,
         date_to_nullable=str_to,
     )
-    time.sleep(2)  # Respect NBA API rate limits.
+    initial_pull._rate_limited_sleep()
     df = initial_pull._call_with_retries(
         lambda: endpoint.get_data_frames()[0],
         description=f"LeagueGameLog(player, {str_from}–{str_to})",
@@ -162,7 +161,7 @@ def _fetch_team_logs_for_range(date_from: date, date_to: date) -> pd.DataFrame:
         date_from_nullable=str_from,
         date_to_nullable=str_to,
     )
-    time.sleep(2)  # Respect NBA API rate limits.
+    initial_pull._rate_limited_sleep()
     df = initial_pull._call_with_retries(
         lambda: endpoint.get_data_frames()[0],
         description=f"LeagueGameLog(team, {str_from}–{str_to})",
@@ -392,7 +391,7 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
             sb = ScoreboardV3(game_date=today_str)
             return sb.game_header.get_data_frame(), sb.line_score.get_data_frame()
 
-        time.sleep(2)  # Respect NBA API rate limits.
+        initial_pull._rate_limited_sleep()
         game_header, line_score = initial_pull._call_with_retries(
             _fetch_scoreboard,
             description=f"ScoreboardV3({today_str})",
@@ -527,7 +526,7 @@ def run_update(db_path: str = DB_PATH) -> int:
     7. Returns the total count of new ``Player_Game_Logs`` rows inserted.
 
     There are **no loops, no scheduling, and no ``while True`` blocks**.
-    A single ``time.sleep(2)`` is called inside each fetch helper after
+    A single rate-limited sleep is called inside each fetch helper before
     every API request.
 
     Args:
