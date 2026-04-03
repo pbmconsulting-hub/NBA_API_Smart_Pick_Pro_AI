@@ -327,6 +327,91 @@ def get_schedule() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Engine-powered analysis endpoints
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_player_projection(
+    player_id: int,
+    opponent: str | None = None,
+    vegas_spread: float = 0.0,
+    game_total: float = 220.0,
+) -> dict:
+    """Fetch an engine-powered stat projection for a player.
+
+    Calls ``GET /api/players/{player_id}/projection``.
+
+    Args:
+        player_id: NBA player ID.
+        opponent: Opponent team abbreviation (auto-detected if omitted).
+        vegas_spread: Vegas point spread.
+        game_total: Vegas over/under game total.
+
+    Returns:
+        Projection dict, or empty dict on error.
+    """
+    params: dict = {"vegas_spread": vegas_spread, "game_total": game_total}
+    if opponent:
+        params["opponent"] = opponent
+    return _get(
+        f"/api/players/{player_id}/projection",
+        params=params,
+        key=None,
+        default={},
+    )
+
+
+def analyze_prop(
+    player_id: int,
+    stat_type: str,
+    prop_line: float,
+    opponent: str | None = None,
+    vegas_spread: float = 0.0,
+    game_total: float = 220.0,
+    platform: str = "prizepicks",
+) -> dict:
+    """Run a full prop analysis via the engine.
+
+    Calls ``POST /api/picks/analyze``.  Not cached because the user may
+    re-analyse with different lines.
+
+    Args:
+        player_id: NBA player ID.
+        stat_type: Engine stat type (e.g. ``'points'``).
+        prop_line: The prop line value.
+        opponent: Opponent abbreviation (auto-detected if omitted).
+        vegas_spread: Vegas spread.
+        game_total: Over/under total.
+        platform: Betting platform name.
+
+    Returns:
+        Full analysis dict, or ``{"status": "error"}`` on failure.
+    """
+    payload = {
+        "player_id": player_id,
+        "stat_type": stat_type,
+        "prop_line": prop_line,
+        "vegas_spread": vegas_spread,
+        "game_total": game_total,
+        "platform": platform,
+    }
+    if opponent:
+        payload["opponent"] = opponent
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/api/picks/analyze",
+            json=payload,
+            timeout=DEFAULT_REQUEST_TIMEOUT * 2,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("POST /api/picks/analyze failed: %s", exc)
+        return {"status": "error", "message": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # POST endpoints (never cached — always live)
 # ---------------------------------------------------------------------------
 

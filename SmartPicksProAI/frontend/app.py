@@ -23,6 +23,7 @@ from typing import Any
 from collections.abc import Callable
 
 from api_service import (
+    analyze_prop,
     get_defense_vs_position,
     get_draft_history,
     get_game_box_score,
@@ -39,6 +40,7 @@ from api_service import (
     get_player_hustle,
     get_player_last5,
     get_player_matchups,
+    get_player_projection,
     get_player_scoring,
     get_player_shot_chart,
     get_player_tracking,
@@ -467,6 +469,7 @@ with st.sidebar:
 
     nav_items = [
         ("🏠  Home", "home"),
+        ("🎯  Prop Analyzer", "prop_analyzer"),
         ("🏆  Standings", "standings"),
         ("🏟️  Teams", "teams_browse"),
         ("📊  Leaders & Stats", "leaders"),
@@ -1603,6 +1606,238 @@ def _page_more() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Prop Analyzer page  (engine-powered)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+_ANALYSIS_STAT_TYPES: list[str] = [
+    "points", "rebounds", "assists", "threes",
+    "steals", "blocks", "turnovers",
+]
+
+_TIER_COLORS: dict[str, str] = {
+    "Platinum": "#E5E4E2",
+    "Gold": "#FFD700",
+    "Silver": "#C0C0C0",
+    "Bronze": "#CD7F32",
+    "Avoid": "#FF4444",
+}
+
+
+def _page_prop_analyzer() -> None:
+    """Interactive prop-analysis page powered by the engine modules."""
+
+    st.title("🎯 Prop Analyzer")
+    st.caption(
+        "Enter a player prop to get an AI-powered analysis with projection, "
+        "simulation, edge detection, and confidence scoring."
+    )
+
+    # ── Sidebar inputs ──────────────────────────────────────────────
+    with st.sidebar:
+        st.subheader("🔍 Prop Setup")
+
+        # Player search
+        query = st.text_input("Search player", key="prop_player_search")
+        selected_player: dict | None = None
+        if query and len(query) >= 2:
+            results = search_players(query)
+            if results:
+                options = {
+                    f"{p.get('full_name', p.get('first_name', '') + ' ' + p.get('last_name', ''))} "
+                    f"({p.get('team_abbreviation', '???')})": p
+                    for p in results[:MAX_SEARCH_RESULTS]
+                }
+                choice = st.selectbox("Select player", list(options.keys()), key="prop_player_select")
+                selected_player = options.get(choice)
+            else:
+                st.info("No players found.")
+
+        stat_type = st.selectbox("Stat type", _ANALYSIS_STAT_TYPES, key="prop_stat_type")
+        prop_line = st.number_input("Prop line", min_value=0.5, value=20.5, step=0.5, key="prop_line_input")
+
+        st.divider()
+        st.subheader("⚙️ Game Context")
+        opponent = st.text_input(
+            "Opponent (abbrev, e.g. BOS)",
+            key="prop_opponent",
+            help="Leave blank to auto-detect from today's schedule.",
+        ).strip().upper() or None
+        vegas_spread = st.number_input("Vegas spread", value=0.0, step=0.5, key="prop_spread")
+        game_total = st.number_input("Game total (O/U)", value=220.0, step=0.5, key="prop_total")
+        platform = st.selectbox(
+            "Platform",
+            ["prizepicks", "underdog", "draftkings", "fanduel"],
+            key="prop_platform",
+        )
+
+        run_analysis = st.button("🚀 Analyze Prop", type="primary", use_container_width=True)
+
+    # ── Main content area ───────────────────────────────────────────
+    if not run_analysis:
+        st.info("👈 Configure a prop in the sidebar and click **Analyze Prop** to begin.")
+        return
+
+    if not selected_player:
+        st.warning("Please search for and select a player first.")
+        return
+
+    player_id = selected_player.get("player_id")
+    if not player_id:
+        st.error("Selected player has no ID.")
+        return
+
+    player_name = (
+        selected_player.get("full_name")
+        or f"{selected_player.get('first_name', '')} {selected_player.get('last_name', '')}".strip()
+    )
+
+    with st.spinner(f"Analyzing {player_name} — {stat_type} {prop_line}…"):
+        result = analyze_prop(
+            player_id=int(player_id),
+            stat_type=stat_type,
+            prop_line=float(prop_line),
+            opponent=opponent,
+            vegas_spread=float(vegas_spread),
+            game_total=float(game_total),
+            platform=platform,
+        )
+
+    if result.get("status") == "error":
+        st.error(f"Analysis failed: {result.get('message', 'Unknown error')}")
+        return
+
+    if "confidence" not in result:
+        st.error("Unexpected response from the analysis engine.")
+        return
+
+    # ── Results display ─────────────────────────────────────────────
+    conf = result.get("confidence", {})
+    tier = conf.get("tier", "Bronze")
+    tier_emoji = conf.get("tier_emoji", "🥉")
+    score = conf.get("confidence_score", 0)
+    direction = result.get("direction", "OVER")
+    model_prob = result.get("model_probability", 0.5)
+    edge = result.get("edge_pct", 0.0)
+
+    # Header card
+    hdr_cols = st.columns([2, 1, 1, 1, 1])
+    hdr_cols[0].markdown(
+        f"### {tier_emoji} {player_name}\n"
+        f"**{stat_type.upper()}** {direction} {prop_line}  •  "
+        f"vs {result.get('opponent', '???')}  •  {platform.title()}"
+    )
+    hdr_cols[1].metric("Confidence", f"{score:.0f}/100", delta=tier)
+    hdr_cols[2].metric("Win Prob", f"{model_prob:.1%}")
+    hdr_cols[3].metric("Edge", f"{edge:+.1f}%")
+    hdr_cols[4].metric("Direction", f"{'🟢' if direction == 'OVER' else '🔴'} {direction}")
+
+    st.divider()
+
+    # ── Explanation ──────────────────────────────────────────────────
+    explanation = result.get("explanation", {})
+    tldr = explanation.get("tldr", "")
+    if tldr:
+        st.markdown(f"**TL;DR:** {tldr}")
+
+    # ── Projection & Simulation ─────────────────────────────────────
+    proj = result.get("projection", {})
+    sim = result.get("simulation", {})
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.subheader("📊 Projection")
+        proj_metrics = {
+            "Projected Points": proj.get("projected_points"),
+            "Projected Rebounds": proj.get("projected_rebounds"),
+            "Projected Assists": proj.get("projected_assists"),
+            "Projected Threes": proj.get("projected_threes"),
+            "Projected Steals": proj.get("projected_steals"),
+            "Projected Blocks": proj.get("projected_blocks"),
+            "Pace Factor": proj.get("pace_factor"),
+            "Defense Factor": proj.get("defense_factor"),
+            "Home/Away Factor": proj.get("home_away_factor"),
+            "Rest Factor": proj.get("rest_factor"),
+            "Blowout Risk": proj.get("blowout_risk"),
+        }
+        for label, val in proj_metrics.items():
+            if val is not None:
+                st.text(f"  {label}: {val}")
+
+    with col_b:
+        st.subheader("🎲 Simulation")
+        sim_metrics = {
+            "Simulated Mean": sim.get("simulated_mean"),
+            "Simulated Std": sim.get("simulated_std"),
+            "P(Over)": sim.get("probability_over"),
+            "10th Percentile": sim.get("percentile_10"),
+            "50th Percentile": sim.get("percentile_50"),
+            "90th Percentile": sim.get("percentile_90"),
+            "90% CI Low": sim.get("ci_90_low"),
+            "90% CI High": sim.get("ci_90_high"),
+            "Simulations Run": sim.get("simulations_run"),
+        }
+        for label, val in sim_metrics.items():
+            if val is not None:
+                display = f"{val:.3f}" if isinstance(val, float) else str(val)
+                st.text(f"  {label}: {display}")
+
+    st.divider()
+
+    # ── Directional Forces ──────────────────────────────────────────
+    forces = result.get("forces", {})
+    over_forces = forces.get("over_forces", [])
+    under_forces = forces.get("under_forces", [])
+
+    col_c, col_d = st.columns(2)
+    with col_c:
+        st.subheader("🟢 OVER Forces")
+        if over_forces:
+            for f in over_forces:
+                name = f.get("name", f.get("force_name", "Unknown"))
+                strength = f.get("strength", f.get("magnitude", 0))
+                st.text(f"  ↑ {name}: {strength:.2f}")
+        else:
+            st.caption("No OVER forces detected.")
+
+    with col_d:
+        st.subheader("🔴 UNDER Forces")
+        if under_forces:
+            for f in under_forces:
+                name = f.get("name", f.get("force_name", "Unknown"))
+                strength = f.get("strength", f.get("magnitude", 0))
+                st.text(f"  ↓ {name}: {strength:.2f}")
+        else:
+            st.caption("No UNDER forces detected.")
+
+    st.divider()
+
+    # ── Detailed Explanation ────────────────────────────────────────
+    with st.expander("📝 Full Explanation", expanded=False):
+        for key in [
+            "average_vs_line", "matchup_explanation", "pace_explanation",
+            "home_away_explanation", "rest_explanation", "vegas_explanation",
+            "projection_explanation", "simulation_narrative", "forces_summary",
+            "recent_form_explanation", "verdict",
+        ]:
+            text = explanation.get(key)
+            if text:
+                st.markdown(f"**{key.replace('_', ' ').title()}:** {text}")
+
+    # ── Risk factors ────────────────────────────────────────────────
+    risk_factors = explanation.get("risk_factors", [])
+    if risk_factors:
+        with st.expander("⚠️ Risk Factors"):
+            for rf in risk_factors:
+                st.warning(rf)
+
+    avoid_reasons = conf.get("avoid_reasons", [])
+    if avoid_reasons:
+        st.error("**Avoid Reasons:** " + " • ".join(avoid_reasons))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Page router
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1616,6 +1851,7 @@ _PAGE_DISPATCH: dict[str, Callable[[], None]] = {
     "leaders": _page_leaders,
     "defense": _page_defense,
     "more": _page_more,
+    "prop_analyzer": _page_prop_analyzer,
 }
 
 _page_fn = _PAGE_DISPATCH.get(st.session_state.page)
