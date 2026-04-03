@@ -38,9 +38,18 @@ import setup_db
 
 # Ensure the SmartPicksProAI package root is importable so that the
 # ``engine`` package can be loaded regardless of working directory.
+# The ``backend/utils.py`` helper may already be cached in sys.modules
+# as ``utils`` (loaded by ``data_updater``).  We stash that reference
+# and re-register it under ``backend.utils`` so the ``utils/`` *package*
+# at the SmartPicksProAI root can be imported normally by engine code.
 _PACKAGE_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PACKAGE_ROOT not in sys.path:
     sys.path.insert(0, _PACKAGE_ROOT)
+_backend_utils = sys.modules.pop("utils", None)
+if _backend_utils is not None and not hasattr(_backend_utils, "__path__"):
+    # Re-register the single-file backend helper under a distinct name
+    # so existing references (data_updater.utils) keep working.
+    sys.modules["backend_utils"] = _backend_utils
 
 logging.basicConfig(
     level=logging.INFO,
