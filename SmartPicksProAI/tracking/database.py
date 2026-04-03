@@ -207,10 +207,10 @@ def get_performance_summary() -> dict:
         row = conn.execute("""
             SELECT
                 COUNT(*) as total_bets,
-                SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN result = 'push' THEN 1 ELSE 0 END) as pushes,
-                SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) as pending
+                COALESCE(SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END), 0) as wins,
+                COALESCE(SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END), 0) as losses,
+                COALESCE(SUM(CASE WHEN result = 'push' THEN 1 ELSE 0 END), 0) as pushes,
+                COALESCE(SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END), 0) as pending
             FROM bets
         """).fetchone()
         conn.close()
@@ -231,9 +231,9 @@ def get_performance_by_tier() -> list[dict]:
             SELECT
                 confidence_tier as tier,
                 COUNT(*) as total,
-                SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) as pending
+                COALESCE(SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END), 0) as wins,
+                COALESCE(SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END), 0) as losses,
+                COALESCE(SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END), 0) as pending
             FROM bets
             WHERE confidence_tier IS NOT NULL AND confidence_tier != ''
             GROUP BY confidence_tier
@@ -260,9 +260,9 @@ def get_performance_by_stat() -> list[dict]:
             SELECT
                 stat_type,
                 COUNT(*) as total,
-                SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) as pending
+                COALESCE(SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END), 0) as wins,
+                COALESCE(SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END), 0) as losses,
+                COALESCE(SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END), 0) as pending
             FROM bets GROUP BY stat_type ORDER BY total DESC
         """).fetchall()
         conn.close()
@@ -286,9 +286,9 @@ def get_performance_by_platform() -> list[dict]:
             SELECT
                 COALESCE(platform, 'Unknown') as platform,
                 COUNT(*) as total,
-                SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) as pending
+                COALESCE(SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END), 0) as wins,
+                COALESCE(SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END), 0) as losses,
+                COALESCE(SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END), 0) as pending
             FROM bets GROUP BY platform ORDER BY total DESC
         """).fetchall()
         conn.close()
