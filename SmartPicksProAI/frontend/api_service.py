@@ -36,13 +36,10 @@ Usage::
         get_team_clutch,
         get_team_hustle,
         get_team_estimated_metrics,
-        get_team_synergy,
         get_play_by_play,
         get_win_probability,
         get_game_rotation,
         get_game_box_score,
-        get_draft_history,
-        get_lineups,
         get_league_dash_players,
         get_league_dash_teams,
         get_recent_games,
@@ -261,12 +258,6 @@ def get_team_estimated_metrics(team_id: int) -> list[dict]:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def get_team_synergy(team_id: int) -> list[dict]:
-    """Fetch a team's synergy data from the backend."""
-    return _get(f"/api/teams/{team_id}/synergy", key="synergy")
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_play_by_play(game_id: str) -> list[dict]:
     """Fetch play-by-play data for a game from the backend."""
     return _get(f"/api/games/{game_id}/play-by-play", key="plays")
@@ -288,18 +279,6 @@ def get_game_rotation(game_id: str) -> list[dict]:
 def get_game_box_score(game_id: str) -> list[dict]:
     """Fetch box score data for a game from the backend."""
     return _get(f"/api/games/{game_id}/box-score", key="players")
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
-def get_draft_history() -> list[dict]:
-    """Fetch NBA draft history from the backend."""
-    return _get("/api/draft-history", key="drafts")
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
-def get_lineups() -> list[dict]:
-    """Fetch lineup data from the backend."""
-    return _get("/api/lineups", key="lineups")
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)

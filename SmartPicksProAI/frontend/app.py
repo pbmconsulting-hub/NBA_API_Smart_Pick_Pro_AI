@@ -25,13 +25,11 @@ from collections.abc import Callable
 from api_service import (
     analyze_prop,
     get_defense_vs_position,
-    get_draft_history,
     get_game_box_score,
     get_game_rotation,
     get_league_dash_players,
     get_league_dash_teams,
     get_league_leaders,
-    get_lineups,
     get_pick_history,
     get_play_by_play,
     get_player_advanced,
@@ -55,7 +53,6 @@ from api_service import (
     get_team_hustle,
     get_team_roster,
     get_team_stats,
-    get_team_synergy,
     get_teams,
     get_todays_games,
     get_win_probability,
@@ -456,7 +453,7 @@ with st.sidebar:
             <div style="font-size:0.65rem; color:rgba(255,255,255,0.3);
                         letter-spacing:0.15em; text-transform:uppercase;
                         margin-top:0.2rem;">
-                NBA Intelligence Platform
+                AI Prop Betting Intelligence
             </div>
         </div>
         """,
@@ -478,7 +475,7 @@ with st.sidebar:
         ("🏟️  Teams", "teams_browse"),
         ("📊  Leaders & Stats", "leaders"),
         ("🛡️  Defense vs Position", "defense"),
-        ("📈  More Data", "more"),
+        ("🗓️  Schedule", "more"),
     ]
     for label, page_key in nav_items:
         if st.button(label, key=f"nav_{page_key}", use_container_width=True):
@@ -542,8 +539,8 @@ with st.sidebar:
     st.divider()
     st.markdown(
         "<div style='text-align:center; color:rgba(255,255,255,0.2); "
-        "font-size:0.65rem;'>SmartPicksProAI v3.0<br>"
-        "Luxury AI Portal</div>",
+        "font-size:0.65rem;'>SmartPicksProAI v4.0<br>"
+        "AI Prop Betting Intelligence</div>",
         unsafe_allow_html=True,
     )
 
@@ -853,7 +850,11 @@ def _page_player_profile() -> None:
             bio_cols[2].metric("Age", bio.get("age", "N/A"))
             bio_cols[3].metric("College", bio.get("college", "N/A"))
             bio_cols[4].metric("Country", bio.get("country", "N/A"))
-            bio_cols[5].metric("Draft Yr", bio.get("draft_year", "N/A"))
+            bio_cols[5].metric(
+                "Experience",
+                f"{bio.get('seasons', 'N/A')} yrs"
+                if bio.get("seasons") else bio.get("draft_year", "N/A"),
+            )
             bio_cols[6].metric("GP", bio.get("gp", "N/A"))
             bio_cols[7].metric(
                 "USG%",
@@ -1199,12 +1200,11 @@ def _page_team_detail() -> None:
 
         st.divider()
 
-        (t_tab_roster, t_tab_games, t_tab_details, t_tab_synergy,
+        (t_tab_roster, t_tab_games, t_tab_details,
          t_tab_clutch, t_tab_hustle, t_tab_metrics, t_tab_dvp) = st.tabs([
             "👥 Roster (click players)",
             "📊 Recent Games",
             "🏢 Details",
-            "🎭 Synergy",
             "🔥 Clutch",
             "💪 Hustle",
             "📈 Metrics",
@@ -1251,19 +1251,6 @@ def _page_team_detail() -> None:
                 dc2[2].metric("Owner", details.get("owner", "N/A"))
             else:
                 st.info("No team details.")
-
-        with t_tab_synergy:
-            st.caption("Play-type efficiency — how well the team runs each offensive action (PPP = Points Per Possession).")
-            synergy = get_team_synergy(tid)
-            if synergy:
-                _show_df(synergy, [
-                    "season_id", "play_type", "type_grouping",
-                    "percentile", "poss_pct", "ppp", "fg_pct",
-                    "efg_pct", "tov_poss_pct", "score_poss_pct",
-                    "poss", "pts",
-                ])
-            else:
-                st.info("No synergy data.")
 
         with t_tab_clutch:
             st.caption("Team performance in clutch time — last 5 min when score is within 5 points.")
@@ -1562,51 +1549,21 @@ Boston.
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# PAGE: MORE DATA
+# PAGE: SCHEDULE
 # ─────────────────────────────────────────────────────────────────────────
 
 def _page_more() -> None:
-    st.title("📈 Additional Data")
+    st.title("🗓️ NBA Schedule")
 
-    m_tab_schedule, m_tab_lineups, m_tab_draft = st.tabs([
-        "🗓️ Schedule",
-        "👥 Lineups",
-        "📋 Draft History",
-    ])
-
-    with m_tab_schedule:
-        schedule = get_schedule()
-        if schedule:
-            _show_df(schedule, [
-                "game_date", "game_status_text", "home_team_tricode",
-                "away_team_tricode", "home_team_score", "away_team_score",
-                "arena_name", "arena_city", "game_id",
-            ], height=500)
-        else:
-            st.info("No schedule data.")
-
-    with m_tab_lineups:
-        lineups = get_lineups()
-        if lineups:
-            _show_df(lineups, [
-                "season", "group_name", "team_abbreviation", "gp",
-                "w", "l", "w_pct", "min", "pts", "reb", "ast", "stl",
-                "blk", "tov", "fg_pct", "fg3_pct", "ft_pct",
-                "plus_minus",
-            ], height=600)
-        else:
-            st.info("No lineup data.")
-
-    with m_tab_draft:
-        drafts = get_draft_history()
-        if drafts:
-            _show_df(drafts, [
-                "season", "overall_pick", "round_number", "round_pick",
-                "full_name", "team_abbreviation", "organization",
-                "organization_type",
-            ], height=600)
-        else:
-            st.info("No draft history data.")
+    schedule = get_schedule()
+    if schedule:
+        _show_df(schedule, [
+            "game_date", "game_status_text", "home_team_tricode",
+            "away_team_tricode", "home_team_score", "away_team_score",
+            "arena_name", "arena_city", "game_id",
+        ], height=600)
+    else:
+        st.info("No schedule data.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -836,19 +836,6 @@ def get_team_estimated_metrics(team_id: int) -> dict:
     return {"metrics": result}
 
 
-@app.get("/api/teams/{team_id}/synergy")
-def get_team_synergy(team_id: int) -> dict:
-    """Return synergy play types for a team."""
-    logger.info("GET /api/teams/%d/synergy", team_id)
-    result = _query_rows(
-        "SELECT * FROM Synergy_Play_Types WHERE team_id = ? "
-        "ORDER BY season_id DESC, play_type",
-        (team_id,),
-        label="get_team_synergy",
-    )
-    return {"synergy": result}
-
-
 @app.get("/api/games/{game_id}/play-by-play")
 def get_play_by_play(game_id: str) -> dict:
     """Return play-by-play data for a game."""
@@ -906,33 +893,6 @@ def get_game_box_score(game_id: str) -> dict:
         label="get_game_box_score",
     )
     return {"game_id": game_id, "players": result}
-
-
-@app.get("/api/draft-history")
-def get_draft_history() -> dict:
-    """Return draft history."""
-    logger.info("GET /api/draft-history")
-    result = _query_rows(
-        "SELECT dh.*, p.full_name "
-        "FROM Draft_History dh "
-        "LEFT JOIN Players p ON dh.person_id = p.player_id "
-        "ORDER BY dh.season DESC, dh.overall_pick",
-        label="get_draft_history",
-    )
-    return {"drafts": result}
-
-
-@app.get("/api/lineups")
-def get_lineups() -> dict:
-    """Return league lineups."""
-    logger.info("GET /api/lineups")
-    result = _query_rows(
-        "SELECT * FROM League_Lineups "
-        "ORDER BY season DESC, plus_minus DESC "
-        "LIMIT 100",
-        label="get_lineups",
-    )
-    return {"lineups": result}
 
 
 @app.get("/api/league-dash/players")
