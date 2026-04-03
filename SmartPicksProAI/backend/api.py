@@ -411,7 +411,7 @@ def search_players(q: str = "") -> dict:
         ORDER BY full_name
         LIMIT ?
         """,
-        (pattern, pattern, pattern, MAX_SEARCH_RESULTS),
+        (*([pattern] * 3), MAX_SEARCH_RESULTS),
         label="search_players",
     )
     return {"results": rows}
