@@ -1848,6 +1848,145 @@ def _page_prop_analyzer() -> None:
 
     st.divider()
 
+    # ── Phase 4: Advanced Insights ──────────────────────────────────
+
+    # Game Script Simulation
+    game_script = result.get("game_script", {})
+    if game_script and "error" not in game_script:
+        with st.expander("🎬 Game Script Simulation", expanded=False):
+            gs_cols = st.columns([1, 1, 1, 1])
+            gs_cols[0].metric(
+                "Blended Mean",
+                f"{game_script.get('blended_mean', 0):.1f}",
+                delta=f"Script: {game_script.get('game_script_mean', 0):.1f}",
+            )
+            gs_cols[1].metric(
+                "Flat Mean",
+                f"{game_script.get('flat_mean', 0):.1f}",
+            )
+            gs_cols[2].metric(
+                "Blowout Rate",
+                f"{game_script.get('blowout_game_rate', 0):.1%}",
+            )
+            gs_cols[3].metric(
+                "Player Tier",
+                game_script.get("player_tier", "rotation").title(),
+            )
+            st.caption(
+                f"Blend: {game_script.get('blend_weight', 0.3):.0%} game-script "
+                f"+ {1 - game_script.get('blend_weight', 0.3):.0%} flat simulation."
+            )
+
+    # Matchup History
+    matchup = result.get("matchup_history", {})
+    if matchup and "error" not in matchup:
+        with st.expander("🏀 Matchup History", expanded=False):
+            if matchup.get("cold_start"):
+                st.info(
+                    f"Fewer than 5 games vs {result.get('opponent', '???')} — "
+                    "matchup adjustment is neutral."
+                )
+            else:
+                mh_cols = st.columns([1, 1, 1, 1])
+                avg_vs = matchup.get("avg_vs_team")
+                mh_cols[0].metric(
+                    "Avg vs Team",
+                    f"{avg_vs:.1f}" if avg_vs is not None else "N/A",
+                )
+                mh_cols[1].metric(
+                    "Games Found",
+                    matchup.get("games_found", 0),
+                )
+                fav = matchup.get("matchup_favorability_score", 50)
+                mh_cols[2].metric(
+                    "Favorability",
+                    f"{fav:.0f}/100",
+                    delta="Favorable" if fav > 55 else ("Unfavorable" if fav < 45 else "Neutral"),
+                    delta_color="normal" if fav > 55 else ("inverse" if fav < 45 else "off"),
+                )
+                adj = matchup.get("adjustment_factor", 1.0)
+                mh_cols[3].metric(
+                    "Projection Adj",
+                    f"{adj:.2f}x",
+                    delta=f"{(adj - 1) * 100:+.1f}%" if adj != 1.0 else "None",
+                    delta_color="normal" if adj > 1.0 else ("inverse" if adj < 1.0 else "off"),
+                )
+
+    # Rotation / Minutes Trend
+    rotation_data = result.get("rotation", {})
+    if rotation_data and "error" not in rotation_data:
+        with st.expander("⏱️ Minutes & Rotation", expanded=False):
+            rt_cols = st.columns([1, 1, 1])
+            min_adj = rotation_data.get("minutes_adjustment", 1.0)
+            rt_cols[0].metric(
+                "Minutes Adj",
+                f"{min_adj:.2f}x",
+                delta=f"{(min_adj - 1) * 100:+.1f}%" if min_adj != 1.0 else "Stable",
+                delta_color="normal" if min_adj > 1.0 else ("inverse" if min_adj < 1.0 else "off"),
+            )
+            role_changed = rotation_data.get("role_change_detected", False)
+            if role_changed:
+                change_type = rotation_data.get("change_type", "none").replace("_", " → ").title()
+                rt_cols[1].metric("Role Change", f"⚠️ {change_type}")
+                rt_cols[2].metric(
+                    "Minutes Shift",
+                    f"{rotation_data.get('change_magnitude', 0):+.1f} min",
+                    delta=f"{rotation_data.get('minutes_before', 0):.0f} → "
+                          f"{rotation_data.get('minutes_after', 0):.0f}",
+                )
+            else:
+                rt_cols[1].metric("Role Change", "✅ None")
+                rt_cols[2].metric("Status", "Stable rotation")
+
+    # Distribution Cross-Check
+    dist_check = result.get("distribution_check", {})
+    if dist_check and "error" not in dist_check:
+        with st.expander("📐 Distribution Cross-Check", expanded=False):
+            dc_cols = st.columns([1, 1, 1])
+            dc_cols[0].metric(
+                "Analytical P(Over)",
+                f"{dist_check.get('analytical_probability', 0):.1%}",
+            )
+            dc_cols[1].metric(
+                "Monte Carlo P(Over)",
+                f"{dist_check.get('monte_carlo_probability', 0):.1%}",
+            )
+            delta_val = dist_check.get("delta", 0)
+            dc_cols[2].metric(
+                "Delta",
+                f"{delta_val:.1%}",
+                delta="Agreement" if delta_val < 0.05 else "Divergence",
+                delta_color="off" if delta_val < 0.05 else "inverse",
+            )
+            if delta_val >= 0.05:
+                st.caption(
+                    "⚠️ Analytical and Monte Carlo probabilities differ by ≥5%.  "
+                    "This may indicate unusual stat distribution or high variance."
+                )
+
+    # Player Efficiency Profile
+    eff = result.get("efficiency", {})
+    if eff and "error" not in eff:
+        with st.expander("📈 Player Efficiency Profile", expanded=False):
+            eff_cols = st.columns([1, 1, 1, 1])
+            eff_cols[0].metric("True Shooting", f"{eff.get('ts_pct', 0):.1%}")
+            eff_cols[1].metric("eFG%", f"{eff.get('efg_pct', 0):.1%}")
+            eff_cols[2].metric("Usage Rate", f"{eff.get('usage_rate', 0):.1f}%")
+            eff_cols[3].metric("Efficiency Tier", eff.get("efficiency_tier", "N/A"))
+
+            epm = eff.get("estimated_epm", {})
+            raptor = eff.get("estimated_raptor", {})
+            if epm or raptor:
+                adv_cols = st.columns([1, 1, 1, 1])
+                if epm:
+                    adv_cols[0].metric("EPM Total", f"{epm.get('total', 0):+.1f}")
+                    adv_cols[1].metric("EPM Percentile", f"{epm.get('percentile', 50):.0f}th")
+                if raptor:
+                    adv_cols[2].metric("RAPTOR Total", f"{raptor.get('raptor_total', 0):+.1f}")
+                    adv_cols[3].metric("Est. WAR", f"{raptor.get('war', 0):.1f}")
+
+    st.divider()
+
     # ── Detailed Explanation ────────────────────────────────────────
     with st.expander("📝 Full Explanation", expanded=False):
         for key in [

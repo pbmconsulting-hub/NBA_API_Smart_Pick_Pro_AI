@@ -1206,6 +1206,13 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
     from engine.bankroll import calculate_kelly_fraction, odds_to_payout_multiplier
     from engine.regime_detection import detect_regime_change
 
+    # Phase 4 engine modules
+    from engine.game_script import blend_with_flat_simulation, simulate_game_script
+    from engine.impact_metrics import calculate_player_efficiency_profile
+    from engine.matchup_history import calculate_matchup_adjustment, get_player_vs_team_history
+    from engine.rotation_tracker import detect_role_change, get_minutes_adjustment
+    from engine.stat_distributions import get_over_probability
+
     # --- Validate stat type ---
     stat_type = body.stat_type.lower()
     if stat_type not in STAT_TYPE_TO_DB_COL:
@@ -1435,7 +1442,107 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         "recommended_pct": f"{kelly_fraction * 100:.2f}%",
     }
 
-    # ── Step 7: Explanation ─────────────────────────────────────────
+    # ── Step 7: Game-script simulation (Phase 4) ───────────────────
+    try:
+        gs_projection = {
+            "projected_stat": projected_avg,
+            "projected_minutes": float(player_data.get("minutes_avg", 32.0)),
+            "stat_std": stat_std,
+        }
+        gs_context = {
+            "vegas_spread": body.vegas_spread,
+            "game_total": body.game_total,
+            "is_home": is_home,
+        }
+        gs_result = simulate_game_script(gs_projection, gs_context)
+        flat_for_blend = {
+            "mean": float(sim_result.get("simulated_mean", projected_avg)),
+            "std": float(sim_result.get("simulated_std", stat_std)),
+        }
+        gs_blend = blend_with_flat_simulation(gs_result, flat_for_blend)
+        game_script = {
+            "blended_mean": gs_blend.get("blended_mean"),
+            "blended_std": gs_blend.get("blended_std"),
+            "game_script_mean": gs_blend.get("game_script_mean"),
+            "flat_mean": gs_blend.get("flat_mean"),
+            "blend_weight": gs_blend.get("blend_weight"),
+            "blowout_game_rate": gs_result.get("blowout_game_rate", 0.0),
+            "player_tier": gs_result.get("player_tier", "rotation"),
+        }
+    except Exception as exc:
+        logger.warning("Game-script simulation failed: %s", exc)
+        game_script = {"error": str(exc)}
+
+    # ── Step 8: Matchup history (Phase 4) ──────────────────────────
+    try:
+        player_name = player_data.get("name", "")
+        matchup_hist = get_player_vs_team_history(
+            player_name=player_name,
+            opponent_team=opponent,
+            stat_type=stat_type,
+            game_logs=engine_logs,
+            season_average=stat_avg,
+        )
+        matchup_adj = calculate_matchup_adjustment(
+            player_name=player_name,
+            opponent_team=opponent,
+            stat_type=stat_type,
+            game_logs=engine_logs,
+            season_average=stat_avg,
+        )
+        matchup_history = {
+            "games_found": matchup_hist.get("games_found", 0),
+            "avg_vs_team": matchup_hist.get("avg_vs_team"),
+            "std_vs_team": matchup_hist.get("std_vs_team", 0.0),
+            "matchup_favorability_score": matchup_hist.get("matchup_favorability_score", 50.0),
+            "cold_start": matchup_hist.get("cold_start", True),
+            "adjustment_factor": matchup_adj,
+        }
+    except Exception as exc:
+        logger.warning("Matchup history failed: %s", exc)
+        matchup_history = {"cold_start": True, "error": str(exc)}
+
+    # ── Step 9: Rotation / minutes trend (Phase 4) ─────────────────
+    try:
+        role_change = detect_role_change(engine_logs)
+        minutes_adj = get_minutes_adjustment(engine_logs)
+        rotation = {
+            "role_change_detected": role_change.get("role_change_detected", False),
+            "change_type": role_change.get("change_type", "none"),
+            "minutes_before": role_change.get("minutes_before", 0.0),
+            "minutes_after": role_change.get("minutes_after", 0.0),
+            "change_magnitude": role_change.get("change_magnitude", 0.0),
+            "minutes_adjustment": round(minutes_adj, 4),
+        }
+    except Exception as exc:
+        logger.warning("Rotation tracker failed: %s", exc)
+        rotation = {"role_change_detected": False, "minutes_adjustment": 1.0, "error": str(exc)}
+
+    # ── Step 10: Distribution cross-check (Phase 4) ────────────────
+    try:
+        analytical_prob = get_over_probability(
+            mean=projected_avg,
+            std=stat_std,
+            line=body.prop_line,
+            stat_type=stat_type,
+        )
+        distribution_check = {
+            "analytical_probability": round(analytical_prob, 4),
+            "monte_carlo_probability": round(prob_over, 4),
+            "delta": round(abs(analytical_prob - prob_over), 4),
+        }
+    except Exception as exc:
+        logger.warning("Distribution cross-check failed: %s", exc)
+        distribution_check = {"error": str(exc)}
+
+    # ── Step 11: Player efficiency profile (Phase 4) ───────────────
+    try:
+        efficiency = calculate_player_efficiency_profile(player_data)
+    except Exception as exc:
+        logger.warning("Efficiency profile failed: %s", exc)
+        efficiency = {"error": str(exc)}
+
+    # ── Step 12: Explanation ────────────────────────────────────────
     try:
         explanation = generate_pick_explanation(
             player_data=player_data,
@@ -1475,6 +1582,12 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         "confidence": confidence,
         "regime": regime,
         "bankroll": bankroll_sizing,
+        # Phase 4 — advanced engine modules
+        "game_script": game_script,
+        "matchup_history": matchup_history,
+        "rotation": rotation,
+        "distribution_check": distribution_check,
+        "efficiency": efficiency,
         "explanation": explanation,
     }
 
