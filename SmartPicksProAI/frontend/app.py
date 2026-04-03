@@ -613,7 +613,7 @@ def _page_player_profile() -> None:
             bio_cols[4].metric("Country", bio.get("country", "N/A"))
             bio_cols[5].metric(
                 "Experience",
-                f"{bio['seasons']} yrs"
+                f"{bio.get('seasons')} yrs"
                 if bio.get("seasons") is not None
                 else "N/A",
             )
