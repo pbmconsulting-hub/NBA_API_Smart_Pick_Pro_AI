@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS bets (
     actual_value    REAL,
     notes           TEXT,
     source          TEXT DEFAULT 'manual',
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT (datetime('now'))  -- UTC
 )"""
 
 CREATE_DAILY_SNAPSHOTS_TABLE = """
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS daily_snapshots (
     pending INTEGER DEFAULT 0,
     win_rate REAL DEFAULT 0.0,
     roi REAL DEFAULT 0.0,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now'))  -- UTC
 )"""
 
 CREATE_ANALYSIS_PICKS_TABLE = """
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS analysis_picks (
     explanation TEXT,
     result TEXT,
     actual_value REAL,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now'))  -- UTC
 )"""
 
 
