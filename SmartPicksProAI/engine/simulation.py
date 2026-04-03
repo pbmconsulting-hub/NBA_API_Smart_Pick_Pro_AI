@@ -648,7 +648,6 @@ def generate_alt_line_probabilities(simulation_output, base_line):
 # ============================================================
 # END SECTION: Alt-Line Probability Generation
 # ============================================================
-import warnings as _warnings
 def run_monte_carlo_simulation(*args, **kwargs):
     """
     DEPRECATED: Use ``run_quantum_matrix_simulation`` directly.
