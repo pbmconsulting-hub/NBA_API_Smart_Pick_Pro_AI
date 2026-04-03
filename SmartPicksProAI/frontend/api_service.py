@@ -36,13 +36,10 @@ Usage::
         get_team_clutch,
         get_team_hustle,
         get_team_estimated_metrics,
-        get_team_synergy,
         get_play_by_play,
         get_win_probability,
         get_game_rotation,
         get_game_box_score,
-        get_draft_history,
-        get_lineups,
         get_league_dash_players,
         get_league_dash_teams,
         get_recent_games,
@@ -261,12 +258,6 @@ def get_team_estimated_metrics(team_id: int) -> list[dict]:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def get_team_synergy(team_id: int) -> list[dict]:
-    """Fetch a team's synergy data from the backend."""
-    return _get(f"/api/teams/{team_id}/synergy", key="synergy")
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_play_by_play(game_id: str) -> list[dict]:
     """Fetch play-by-play data for a game from the backend."""
     return _get(f"/api/games/{game_id}/play-by-play", key="plays")
@@ -288,18 +279,6 @@ def get_game_rotation(game_id: str) -> list[dict]:
 def get_game_box_score(game_id: str) -> list[dict]:
     """Fetch box score data for a game from the backend."""
     return _get(f"/api/games/{game_id}/box-score", key="players")
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
-def get_draft_history() -> list[dict]:
-    """Fetch NBA draft history from the backend."""
-    return _get("/api/draft-history", key="drafts")
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
-def get_lineups() -> list[dict]:
-    """Fetch lineup data from the backend."""
-    return _get("/api/lineups", key="lineups")
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -327,6 +306,91 @@ def get_schedule() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Engine-powered analysis endpoints
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_player_projection(
+    player_id: int,
+    opponent: str | None = None,
+    vegas_spread: float = 0.0,
+    game_total: float = 220.0,
+) -> dict:
+    """Fetch an engine-powered stat projection for a player.
+
+    Calls ``GET /api/players/{player_id}/projection``.
+
+    Args:
+        player_id: NBA player ID.
+        opponent: Opponent team abbreviation (auto-detected if omitted).
+        vegas_spread: Vegas point spread.
+        game_total: Vegas over/under game total.
+
+    Returns:
+        Projection dict, or empty dict on error.
+    """
+    params: dict = {"vegas_spread": vegas_spread, "game_total": game_total}
+    if opponent:
+        params["opponent"] = opponent
+    return _get(
+        f"/api/players/{player_id}/projection",
+        params=params,
+        key=None,
+        default={},
+    )
+
+
+def analyze_prop(
+    player_id: int,
+    stat_type: str,
+    prop_line: float,
+    opponent: str | None = None,
+    vegas_spread: float = 0.0,
+    game_total: float = 220.0,
+    platform: str = "prizepicks",
+) -> dict:
+    """Run a full prop analysis via the engine.
+
+    Calls ``POST /api/picks/analyze``.  Not cached because the user may
+    re-analyse with different lines.
+
+    Args:
+        player_id: NBA player ID.
+        stat_type: Engine stat type (e.g. ``'points'``).
+        prop_line: The prop line value.
+        opponent: Opponent abbreviation (auto-detected if omitted).
+        vegas_spread: Vegas spread.
+        game_total: Over/under total.
+        platform: Betting platform name.
+
+    Returns:
+        Full analysis dict, or ``{"status": "error"}`` on failure.
+    """
+    payload = {
+        "player_id": player_id,
+        "stat_type": stat_type,
+        "prop_line": prop_line,
+        "vegas_spread": vegas_spread,
+        "game_total": game_total,
+        "platform": platform,
+    }
+    if opponent:
+        payload["opponent"] = opponent
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/api/picks/analyze",
+            json=payload,
+            timeout=DEFAULT_REQUEST_TIMEOUT * 2,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("POST /api/picks/analyze failed: %s", exc)
+        return {"status": "error", "message": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # POST endpoints (never cached — always live)
 # ---------------------------------------------------------------------------
 
@@ -347,4 +411,78 @@ def trigger_refresh() -> dict:
         return resp.json()
     except (requests.RequestException, ValueError) as exc:
         logger.error("Failed to trigger refresh: %s", exc)
+        return {"status": "error", "message": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Pick-tracking endpoints (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def save_pick(pick_data: dict) -> dict:
+    """Persist a pick analysis result for future tracking.
+
+    Calls ``POST /api/picks/save``.
+
+    Args:
+        pick_data: Dict matching the SavePickRequest schema.
+
+    Returns:
+        ``{"status": "saved", "pick_id": <int>}`` on success,
+        or ``{"status": "error", ...}`` on failure.
+    """
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/api/picks/save",
+            json=pick_data,
+            timeout=DEFAULT_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("POST /api/picks/save failed: %s", exc)
+        return {"status": "error", "message": str(exc)}
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_pick_history(limit: int = 50) -> list[dict]:
+    """Retrieve saved pick history from the backend.
+
+    Calls ``GET /api/picks/history``.
+
+    Args:
+        limit: Maximum number of picks to return.
+
+    Returns:
+        List of pick dicts, newest first.
+    """
+    return _get(f"/api/picks/history", params={"limit": limit}, key="picks")
+
+
+def update_pick_result(pick_id: int, result: str, actual_value: float | None = None) -> dict:
+    """Record the outcome of a previously saved pick.
+
+    Calls ``POST /api/picks/result``.
+
+    Args:
+        pick_id: The pick's database ID.
+        result: ``'hit'``, ``'miss'``, or ``'push'``.
+        actual_value: The player's actual stat value, if known.
+
+    Returns:
+        ``{"status": "updated", "pick_id": <int>}`` or error dict.
+    """
+    payload: dict = {"pick_id": pick_id, "result": result}
+    if actual_value is not None:
+        payload["actual_value"] = actual_value
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/api/picks/result",
+            json=payload,
+            timeout=DEFAULT_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("POST /api/picks/result failed: %s", exc)
         return {"status": "error", "message": str(exc)}

@@ -1,14 +1,12 @@
 """
 app.py
 ------
-Streamlit dashboard for SmartPicksProAI.
+Streamlit dashboard for SmartPicksProAI — Smart Pick Pro AI Edition.
 
-A premium "luxury AI portal" interface for viewing NBA matchups, analysing
-player performance, browsing team rosters, and exploring all data.
+Quantum Edge dark theme with glassmorphism, neon cyan/green glow,
+Orbitron headings, and Joseph M Smith branded assets.
 
-Every game card is clickable — opening a rich detail view with box scores,
-team comparisons, and player lists.  Every player name is clickable —
-opening a deep-dive profile with bio, career, advanced stats, and more.
+Includes: Prop Analyzer, Bet Tracker, Pick History, and full NBA stats.
 
 Start the dashboard::
 
@@ -16,21 +14,54 @@ Start the dashboard::
     streamlit run app.py
 """
 
+import sys
+import os
+import datetime
 import pandas as pd
 import streamlit as st
 
 from typing import Any
 from collections.abc import Callable
+from pathlib import Path
+
+# ── Ensure SmartPicksProAI package root is on sys.path ──────
+_FRONTEND_DIR = Path(__file__).resolve().parent
+_PACKAGE_ROOT = _FRONTEND_DIR.parent
+if str(_PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PACKAGE_ROOT))
+
+from styles.theme import (
+    get_global_css,
+    get_hero_banner_html,
+    get_sidebar_avatar_html,
+    get_sidebar_brand_html,
+    get_summary_cards_html,
+    get_tier_badge_html,
+    get_verdict_banner_html,
+)
+from tracking.database import initialize_database as _init_tracker_db
+from tracking.bet_tracker import (
+    auto_log_analysis_bets,
+    get_model_performance_stats,
+    log_new_bet,
+    record_bet_result,
+    VALID_PLATFORMS,
+)
+from tracking.database import (
+    load_all_bets,
+    load_analysis_picks,
+    get_performance_by_tier,
+)
 
 from api_service import (
+    analyze_prop,
     get_defense_vs_position,
-    get_draft_history,
     get_game_box_score,
     get_game_rotation,
     get_league_dash_players,
     get_league_dash_teams,
     get_league_leaders,
-    get_lineups,
+    get_pick_history,
     get_play_by_play,
     get_player_advanced,
     get_player_bio,
@@ -39,6 +70,7 @@ from api_service import (
     get_player_hustle,
     get_player_last5,
     get_player_matchups,
+    get_player_projection,
     get_player_scoring,
     get_player_shot_chart,
     get_player_tracking,
@@ -52,12 +84,13 @@ from api_service import (
     get_team_hustle,
     get_team_roster,
     get_team_stats,
-    get_team_synergy,
     get_teams,
     get_todays_games,
     get_win_probability,
+    save_pick,
     search_players,
     trigger_refresh,
+    update_pick_result,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -68,12 +101,18 @@ MAX_GAME_COLUMNS = 4
 MAX_RECENT_GAMES = 20
 MAX_SEARCH_RESULTS = 10
 
+# Example bankroll used for display purposes only (not financial advice).
+EXAMPLE_BANKROLL = 500.0
+
 st.set_page_config(
-    page_title="SmartPicksProAI",
+    page_title="Smart Pick Pro — NBA Edition",
     page_icon="🏀",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Initialize bet tracker database
+_init_tracker_db()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Session-state navigation
@@ -99,274 +138,10 @@ def _nav(page: str, **kwargs) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Premium luxury + AI portal CSS
+# Quantum Edge Dark Theme (from styles/theme.py)
 # ═══════════════════════════════════════════════════════════════════════════
 
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
-    /* ── Global ───────────────────────────────────────────────── */
-    .stApp {
-        background: linear-gradient(135deg, #0a0e1a 0%, #0d1225 40%, #111830 100%);
-        color: #e0e6f0;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0c1024 0%, #111830 100%);
-        border-right: 1px solid rgba(212, 175, 55, 0.15);
-    }
-
-    /* ── Typography ───────────────────────────────────────────── */
-    h1 {
-        background: linear-gradient(135deg, #d4af37 0%, #f0d060 50%, #d4af37 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        letter-spacing: -0.02em;
-    }
-    h2, h3 {
-        color: #d4af37;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-    }
-    h4 {
-        color: #7eb8da;
-        font-weight: 600;
-    }
-
-    /* ── Glass cards ──────────────────────────────────────────── */
-    .glass-card {
-        background: rgba(18, 25, 50, 0.65);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(212, 175, 55, 0.12);
-        border-radius: 16px;
-        padding: 1.2rem 1.4rem;
-        margin-bottom: 0.8rem;
-        transition: all 0.25s ease;
-    }
-    .glass-card:hover {
-        border-color: rgba(212, 175, 55, 0.35);
-        box-shadow: 0 8px 32px rgba(212, 175, 55, 0.08);
-        transform: translateY(-2px);
-    }
-    .glass-card-sm {
-        background: rgba(18, 25, 50, 0.5);
-        backdrop-filter: blur(8px);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 12px;
-        padding: 0.8rem 1rem;
-        margin-bottom: 0.5rem;
-    }
-
-    /* ── Game cards (clickable) ───────────────────────────────── */
-    .game-tile {
-        background: linear-gradient(135deg, rgba(18, 25, 55, 0.8) 0%, rgba(15, 20, 45, 0.9) 100%);
-        border: 1px solid rgba(212, 175, 55, 0.15);
-        border-radius: 16px;
-        padding: 1.4rem;
-        text-align: center;
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
-    }
-    .game-tile::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0;
-        height: 3px;
-        background: linear-gradient(90deg, transparent, #d4af37, transparent);
-        opacity: 0;
-        transition: opacity 0.3s ease;
-    }
-    .game-tile:hover::before { opacity: 1; }
-    .game-tile:hover {
-        border-color: rgba(212, 175, 55, 0.4);
-        box-shadow: 0 12px 40px rgba(212, 175, 55, 0.1);
-        transform: translateY(-3px);
-    }
-    .game-tile .teams {
-        font-size: 1.15rem;
-        font-weight: 700;
-        color: #ffffff;
-        letter-spacing: 0.02em;
-    }
-    .game-tile .vs { color: #d4af37; margin: 0 0.4rem; }
-    .game-tile .score {
-        font-size: 1.5rem;
-        font-weight: 800;
-        color: #d4af37;
-        margin: 0.4rem 0;
-    }
-    .game-tile .meta {
-        font-size: 0.7rem;
-        color: rgba(255, 255, 255, 0.35);
-        margin-top: 0.5rem;
-    }
-
-    /* ── Metric cards ─────────────────────────────────────────── */
-    [data-testid="stMetric"] {
-        background: rgba(18, 25, 50, 0.6);
-        backdrop-filter: blur(8px);
-        border: 1px solid rgba(212, 175, 55, 0.1);
-        border-radius: 12px;
-        padding: 0.8rem 1rem;
-    }
-    [data-testid="stMetricValue"] {
-        color: #d4af37 !important;
-        font-weight: 700;
-    }
-    [data-testid="stMetricLabel"] {
-        color: rgba(255, 255, 255, 0.5) !important;
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-    }
-
-    /* ── Buttons ──────────────────────────────────────────────── */
-    .stButton > button {
-        background: linear-gradient(135deg, #d4af37 0%, #b8941e 100%);
-        color: #0a0e1a;
-        border: none;
-        border-radius: 10px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        transition: all 0.25s ease;
-    }
-    .stButton > button:hover {
-        background: linear-gradient(135deg, #e6c453 0%, #d4af37 100%);
-        box-shadow: 0 6px 24px rgba(212, 175, 55, 0.25);
-        transform: translateY(-1px);
-    }
-    .stButton > button:active {
-        transform: translateY(0);
-    }
-
-    /* ── Tabs ─────────────────────────────────────────────────── */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 4px;
-        background: rgba(18, 25, 50, 0.3);
-        border-radius: 12px;
-        padding: 4px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background: transparent;
-        border-radius: 8px;
-        color: rgba(255, 255, 255, 0.45);
-        font-weight: 500;
-        padding: 0.5rem 1.2rem;
-        transition: all 0.2s ease;
-    }
-    .stTabs [data-baseweb="tab"]:hover {
-        color: rgba(255, 255, 255, 0.7);
-        background: rgba(212, 175, 55, 0.06);
-    }
-    .stTabs [aria-selected="true"] {
-        background: rgba(212, 175, 55, 0.12) !important;
-        color: #d4af37 !important;
-        font-weight: 600;
-        border-bottom: 2px solid #d4af37;
-    }
-
-    /* ── Data tables ──────────────────────────────────────────── */
-    .stDataFrame { font-size: 0.82rem; }
-    .stDataFrame [data-testid="stDataFrameResizable"] {
-        border: 1px solid rgba(212, 175, 55, 0.08);
-        border-radius: 12px;
-        overflow: hidden;
-    }
-
-    /* ── Layout ───────────────────────────────────────────────── */
-    .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 1rem;
-        max-width: 1400px;
-    }
-
-    /* ── Section headers ──────────────────────────────────────── */
-    .section-hdr {
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: rgba(212, 175, 55, 0.6);
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        margin: 1.5rem 0 0.6rem 0;
-        padding-bottom: 0.4rem;
-        border-bottom: 1px solid rgba(212, 175, 55, 0.1);
-    }
-
-    /* ── AI glow accent ───────────────────────────────────────── */
-    .ai-glow {
-        position: relative;
-    }
-    .ai-glow::after {
-        content: '';
-        position: absolute;
-        top: 50%; left: 50%;
-        width: 200%; height: 200%;
-        transform: translate(-50%, -50%);
-        background: radial-gradient(circle, rgba(0, 212, 255, 0.03) 0%, transparent 70%);
-        pointer-events: none;
-    }
-
-    /* ── Player chip (clickable pill) ─────────────────────────── */
-    .player-chip {
-        display: inline-block;
-        background: rgba(212, 175, 55, 0.08);
-        border: 1px solid rgba(212, 175, 55, 0.15);
-        border-radius: 20px;
-        padding: 0.25rem 0.75rem;
-        font-size: 0.82rem;
-        color: #e0e6f0;
-        margin: 0.15rem 0.1rem;
-        transition: all 0.2s ease;
-    }
-    .player-chip:hover {
-        background: rgba(212, 175, 55, 0.18);
-        border-color: rgba(212, 175, 55, 0.4);
-    }
-    .player-chip .pos {
-        color: rgba(212, 175, 55, 0.6);
-        font-size: 0.7rem;
-        margin-left: 0.3rem;
-    }
-
-    /* ── Empty state ──────────────────────────────────────────── */
-    .empty-state {
-        text-align: center;
-        color: rgba(255, 255, 255, 0.3);
-        padding: 3rem;
-        font-style: italic;
-        font-size: 0.9rem;
-    }
-
-    /* ── Back nav ─────────────────────────────────────────────── */
-    .back-btn {
-        font-size: 0.82rem;
-        color: rgba(212, 175, 55, 0.7);
-    }
-
-    /* ── Divider style ────────────────────────────────────────── */
-    hr {
-        border-color: rgba(212, 175, 55, 0.08) !important;
-    }
-
-    /* ── Scrollbar ────────────────────────────────────────────── */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb {
-        background: rgba(212, 175, 55, 0.2);
-        border-radius: 3px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-        background: rgba(212, 175, 55, 0.35);
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown(get_global_css(), unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -433,30 +208,15 @@ def _game_button(game: dict[str, Any], key_prefix: str = "") -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Sidebar — Premium navigation + Admin + Team browser
+# Sidebar — Smart Pick Pro branded nav + Joseph M Smith avatar
 # ═══════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
     # Logo / Brand
-    st.markdown(
-        """
-        <div style="text-align:center; padding: 0.5rem 0 1rem 0;">
-            <div style="font-size:2.5rem;">🏀</div>
-            <div style="
-                font-size:1.1rem; font-weight:800; letter-spacing:0.05em;
-                background: linear-gradient(135deg, #d4af37, #f0d060);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            ">SMARTPICKS PRO AI</div>
-            <div style="font-size:0.65rem; color:rgba(255,255,255,0.3);
-                        letter-spacing:0.15em; text-transform:uppercase;
-                        margin-top:0.2rem;">
-                NBA Intelligence Platform
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(get_sidebar_brand_html(), unsafe_allow_html=True)
+
+    # Joseph M Smith avatar
+    st.markdown(get_sidebar_avatar_html(), unsafe_allow_html=True)
     st.divider()
 
     # ── Navigation ────────────────────────────────────────────
@@ -467,11 +227,14 @@ with st.sidebar:
 
     nav_items = [
         ("🏠  Home", "home"),
+        ("🎯  Prop Analyzer", "prop_analyzer"),
+        ("📈  Bet Tracker", "bet_tracker"),
+        ("📋  Pick History", "pick_history"),
         ("🏆  Standings", "standings"),
         ("🏟️  Teams", "teams_browse"),
         ("📊  Leaders & Stats", "leaders"),
         ("🛡️  Defense vs Position", "defense"),
-        ("📈  More Data", "more"),
+        ("🗓️  Schedule", "more"),
     ]
     for label, page_key in nav_items:
         if st.button(label, key=f"nav_{page_key}", use_container_width=True):
@@ -534,9 +297,8 @@ with st.sidebar:
 
     st.divider()
     st.markdown(
-        "<div style='text-align:center; color:rgba(255,255,255,0.2); "
-        "font-size:0.65rem;'>SmartPicksProAI v3.0<br>"
-        "Luxury AI Portal</div>",
+        '<div class="sidebar-engine-label">'
+        '⚡ Powered by Quantum Matrix Engine 5.6</div>',
         unsafe_allow_html=True,
     )
 
@@ -550,8 +312,11 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────────
 
 def _page_home() -> None:
-    st.title("🏀 SmartPicks Pro AI")
-    st.caption("Your premium NBA intelligence platform — click any game or player to explore")
+    # Hero banner
+    st.markdown(get_hero_banner_html(), unsafe_allow_html=True)
+
+    st.title("🏀 Smart Pick Pro AI")
+    st.caption("Quantum AI Prop Intelligence — click any game or player to explore")
 
     # ── Today's Games ─────────────────────────────────────────
     st.markdown('<div class="section-hdr">Today\'s Matchups</div>',
@@ -846,7 +611,12 @@ def _page_player_profile() -> None:
             bio_cols[2].metric("Age", bio.get("age", "N/A"))
             bio_cols[3].metric("College", bio.get("college", "N/A"))
             bio_cols[4].metric("Country", bio.get("country", "N/A"))
-            bio_cols[5].metric("Draft Yr", bio.get("draft_year", "N/A"))
+            bio_cols[5].metric(
+                "Experience",
+                f"{bio.get('seasons')} yrs"
+                if bio.get("seasons") is not None
+                else "N/A",
+            )
             bio_cols[6].metric("GP", bio.get("gp", "N/A"))
             bio_cols[7].metric(
                 "USG%",
@@ -1192,12 +962,11 @@ def _page_team_detail() -> None:
 
         st.divider()
 
-        (t_tab_roster, t_tab_games, t_tab_details, t_tab_synergy,
+        (t_tab_roster, t_tab_games, t_tab_details,
          t_tab_clutch, t_tab_hustle, t_tab_metrics, t_tab_dvp) = st.tabs([
             "👥 Roster (click players)",
             "📊 Recent Games",
             "🏢 Details",
-            "🎭 Synergy",
             "🔥 Clutch",
             "💪 Hustle",
             "📈 Metrics",
@@ -1244,19 +1013,6 @@ def _page_team_detail() -> None:
                 dc2[2].metric("Owner", details.get("owner", "N/A"))
             else:
                 st.info("No team details.")
-
-        with t_tab_synergy:
-            st.caption("Play-type efficiency — how well the team runs each offensive action (PPP = Points Per Possession).")
-            synergy = get_team_synergy(tid)
-            if synergy:
-                _show_df(synergy, [
-                    "season_id", "play_type", "type_grouping",
-                    "percentile", "poss_pct", "ppp", "fg_pct",
-                    "efg_pct", "tov_poss_pct", "score_poss_pct",
-                    "poss", "pts",
-                ])
-            else:
-                st.info("No synergy data.")
 
         with t_tab_clutch:
             st.caption("Team performance in clutch time — last 5 min when score is within 5 points.")
@@ -1555,51 +1311,796 @@ Boston.
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# PAGE: MORE DATA
+# PAGE: SCHEDULE
 # ─────────────────────────────────────────────────────────────────────────
 
 def _page_more() -> None:
-    st.title("📈 Additional Data")
+    st.title("🗓️ NBA Schedule")
 
-    m_tab_schedule, m_tab_lineups, m_tab_draft = st.tabs([
-        "🗓️ Schedule",
-        "👥 Lineups",
-        "📋 Draft History",
+    schedule = get_schedule()
+    if schedule:
+        _show_df(schedule, [
+            "game_date", "game_status_text", "home_team_tricode",
+            "away_team_tricode", "home_team_score", "away_team_score",
+            "arena_name", "arena_city", "game_id",
+        ], height=600)
+    else:
+        st.info("No schedule data.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Prop Analyzer page  (engine-powered)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+_ANALYSIS_STAT_TYPES: list[str] = [
+    "points", "rebounds", "assists", "threes",
+    "steals", "blocks", "turnovers",
+]
+
+_TIER_COLORS: dict[str, str] = {
+    "Platinum": "#E5E4E2",
+    "Gold": "#FFD700",
+    "Silver": "#C0C0C0",
+    "Bronze": "#CD7F32",
+    "Avoid": "#FF4444",
+}
+
+
+def _page_prop_analyzer() -> None:
+    """Interactive prop-analysis page powered by the engine modules."""
+
+    st.title("🎯 Prop Analyzer")
+    st.caption(
+        "Enter a player prop to get an AI-powered analysis with projection, "
+        "simulation, edge detection, and confidence scoring."
+    )
+
+    # ── Sidebar inputs ──────────────────────────────────────────────
+    with st.sidebar:
+        st.subheader("🔍 Prop Setup")
+
+        # Player search
+        query = st.text_input("Search player", key="prop_player_search")
+        selected_player: dict | None = None
+        if query and len(query) >= 2:
+            results = search_players(query)
+            if results:
+                options = {
+                    f"{p.get('full_name', p.get('first_name', '') + ' ' + p.get('last_name', ''))} "
+                    f"({p.get('team_abbreviation', '???')})": p
+                    for p in results[:MAX_SEARCH_RESULTS]
+                }
+                choice = st.selectbox("Select player", list(options.keys()), key="prop_player_select")
+                selected_player = options.get(choice)
+            else:
+                st.info("No players found.")
+
+        stat_type = st.selectbox("Stat type", _ANALYSIS_STAT_TYPES, key="prop_stat_type")
+        prop_line = st.number_input("Prop line", min_value=0.5, value=20.5, step=0.5, key="prop_line_input")
+
+        st.divider()
+        st.subheader("⚙️ Game Context")
+        opponent = st.text_input(
+            "Opponent (abbrev, e.g. BOS)",
+            key="prop_opponent",
+            help="Leave blank to auto-detect from today's schedule.",
+        ).strip().upper() or None
+        vegas_spread = st.number_input("Vegas spread", value=0.0, step=0.5, key="prop_spread")
+        game_total = st.number_input("Game total (O/U)", value=220.0, step=0.5, key="prop_total")
+        platform = st.selectbox(
+            "Platform",
+            ["prizepicks", "underdog", "draftkings", "fanduel"],
+            key="prop_platform",
+        )
+
+        run_analysis = st.button("🚀 Analyze Prop", type="primary", use_container_width=True)
+
+    # ── Main content area ───────────────────────────────────────────
+    if not run_analysis:
+        st.info("👈 Configure a prop in the sidebar and click **Analyze Prop** to begin.")
+        return
+
+    if not selected_player:
+        st.warning("Please search for and select a player first.")
+        return
+
+    player_id = selected_player.get("player_id")
+    if not player_id:
+        st.error("Selected player has no ID.")
+        return
+
+    player_name = (
+        selected_player.get("full_name")
+        or f"{selected_player.get('first_name', '')} {selected_player.get('last_name', '')}".strip()
+    )
+
+    with st.spinner(f"Analyzing {player_name} — {stat_type} {prop_line}…"):
+        result = analyze_prop(
+            player_id=int(player_id),
+            stat_type=stat_type,
+            prop_line=float(prop_line),
+            opponent=opponent,
+            vegas_spread=float(vegas_spread),
+            game_total=float(game_total),
+            platform=platform,
+        )
+
+    if result.get("status") == "error":
+        st.error(f"Analysis failed: {result.get('message', 'Unknown error')}")
+        return
+
+    if "confidence" not in result:
+        st.error("Unexpected response from the analysis engine.")
+        return
+
+    # ── Auto-log to bet tracker ──────────────────────────────
+    try:
+        auto_log_analysis_bets(result, platform=platform)
+    except Exception:
+        pass  # Never block UI for tracking errors
+
+    # ── Extract core data ───────────────────────────────────────────
+    conf = result.get("confidence", {})
+    tier = conf.get("tier", "Bronze")
+    tier_emoji = conf.get("tier_emoji", "🥉")
+    score = conf.get("confidence_score", 0)
+    direction = result.get("direction", "OVER")
+    model_prob = result.get("model_probability", 0.5)
+    edge = result.get("edge_pct", 0.0)
+    explanation = result.get("explanation", {})
+    proj = result.get("projection", {})
+    sim = result.get("simulation", {})
+    forces = result.get("forces", {})
+    bankroll = result.get("bankroll", {})
+    regime = result.get("regime", {})
+    kelly_frac = bankroll.get("kelly_fraction", 0.0)
+    regime_changed = regime.get("regime_changed", False)
+    regime_dir = regime.get("direction", "stable")
+    team_abbrev = result.get("team", "???")
+    opp_abbrev = result.get("opponent", "???")
+
+    # ── Player Result Card ──────────────────────────────────────────
+    st.markdown('<div class="player-result-card">', unsafe_allow_html=True)
+
+    # Card header: player name, matchup info, tier badge
+    dir_icon = "🟢" if direction == "OVER" else "🔴"
+    st.markdown(
+        f"""<div class="player-card-header">
+            <div>
+                <div class="player-card-name">{tier_emoji} {player_name}</div>
+                <div class="player-card-meta">
+                    {team_abbrev} vs {opp_abbrev}  ·  {stat_type.upper()} {direction} {prop_line}  ·  {platform.title()}
+                </div>
+            </div>
+            <div class="player-card-tier">
+                {get_tier_badge_html(tier)}
+            </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="player-card-body">', unsafe_allow_html=True)
+
+    # ── Joseph M Smith's Verdict ────────────────────────────────────
+    verdict_text = explanation.get("verdict", "")
+    tldr = explanation.get("tldr", "")
+    if verdict_text:
+        st.markdown(get_verdict_banner_html(verdict_text), unsafe_allow_html=True)
+    elif tldr:
+        st.markdown(get_verdict_banner_html(tldr), unsafe_allow_html=True)
+
+    # ── Quick Metrics Row ───────────────────────────────────────────
+    qm = st.columns([1, 1, 1, 1, 1])
+    qm[0].metric("Confidence", f"{score:.0f}/100", delta=tier)
+    qm[1].metric("Win Prob", f"{model_prob:.1%}")
+    qm[2].metric("Edge", f"{edge:+.1f}%")
+    qm[3].metric("Direction", f"{dir_icon} {direction}")
+    kelly_pct = bankroll.get("recommended_pct", "0.00%")
+    qm[4].metric("Kelly Size", kelly_pct)
+
+    # ── Tabbed Sections ─────────────────────────────────────────────
+    tab_info, tab_pred, tab_bet = st.tabs([
+        "📋 Player Info & Stats",
+        "🔮 Predictions & Analysis",
+        "💰 Bet Sizing & Verdict",
     ])
 
-    with m_tab_schedule:
-        schedule = get_schedule()
-        if schedule:
-            _show_df(schedule, [
-                "game_date", "game_status_text", "home_team_tricode",
-                "away_team_tricode", "home_team_score", "away_team_score",
-                "arena_name", "arena_city", "game_id",
-            ], height=500)
-        else:
-            st.info("No schedule data.")
+    # ══════════════════════════════════════════════════════════════
+    # TAB 1: Player Info & Stats
+    # ══════════════════════════════════════════════════════════════
+    with tab_info:
+        # Matchup summary
+        st.subheader(f"🏀 {player_name} — {team_abbrev} vs {opp_abbrev}")
 
-    with m_tab_lineups:
-        lineups = get_lineups()
-        if lineups:
-            _show_df(lineups, [
-                "season", "group_name", "team_abbreviation", "gp",
-                "w", "l", "w_pct", "min", "pts", "reb", "ast", "stl",
-                "blk", "tov", "fg_pct", "fg3_pct", "ft_pct",
-                "plus_minus",
-            ], height=600)
-        else:
-            st.info("No lineup data.")
+        info_c1, info_c2 = st.columns(2)
 
-    with m_tab_draft:
-        drafts = get_draft_history()
-        if drafts:
-            _show_df(drafts, [
-                "season", "overall_pick", "round_number", "round_pick",
-                "full_name", "team_abbreviation", "organization",
-                "organization_type",
-            ], height=600)
+        with info_c1:
+            st.markdown("**Projection Factors**")
+            proj_metrics = {
+                "Projected Points": proj.get("projected_points"),
+                "Projected Rebounds": proj.get("projected_rebounds"),
+                "Projected Assists": proj.get("projected_assists"),
+                "Projected Threes": proj.get("projected_threes"),
+                "Projected Steals": proj.get("projected_steals"),
+                "Projected Blocks": proj.get("projected_blocks"),
+            }
+            for label, val in proj_metrics.items():
+                if val is not None:
+                    st.text(f"  {label}: {val}")
+
+        with info_c2:
+            st.markdown("**Context Adjustments**")
+            ctx_metrics = {
+                "Pace Factor": proj.get("pace_factor"),
+                "Defense Factor": proj.get("defense_factor"),
+                "Home/Away Factor": proj.get("home_away_factor"),
+                "Rest Factor": proj.get("rest_factor"),
+                "Blowout Risk": proj.get("blowout_risk"),
+            }
+            for label, val in ctx_metrics.items():
+                if val is not None:
+                    st.text(f"  {label}: {val}")
+
+        # Matchup History
+        matchup = result.get("matchup_history", {})
+        if matchup and "error" not in matchup:
+            st.divider()
+            st.markdown("**Matchup History**")
+            if matchup.get("cold_start"):
+                st.info(
+                    f"Fewer than 5 games vs {opp_abbrev} — matchup adjustment is neutral."
+                )
+            else:
+                mh_cols = st.columns([1, 1, 1, 1])
+                avg_vs = matchup.get("avg_vs_team")
+                mh_cols[0].metric(
+                    "Avg vs Team",
+                    f"{avg_vs:.1f}" if avg_vs is not None else "N/A",
+                )
+                mh_cols[1].metric("Games Found", matchup.get("games_found", 0))
+                fav = matchup.get("matchup_favorability_score", 50)
+                mh_cols[2].metric(
+                    "Favorability",
+                    f"{fav:.0f}/100",
+                    delta="Favorable" if fav > 55 else ("Unfavorable" if fav < 45 else "Neutral"),
+                    delta_color="normal" if fav > 55 else ("inverse" if fav < 45 else "off"),
+                )
+                adj = matchup.get("adjustment_factor", 1.0)
+                mh_cols[3].metric(
+                    "Projection Adj",
+                    f"{adj:.2f}x",
+                    delta=f"{(adj - 1) * 100:+.1f}%" if adj != 1.0 else "None",
+                    delta_color="normal" if adj > 1.0 else ("inverse" if adj < 1.0 else "off"),
+                )
+
+        # Rotation / Minutes
+        rotation_data = result.get("rotation", {})
+        if rotation_data and "error" not in rotation_data:
+            st.divider()
+            st.markdown("**Minutes & Rotation**")
+            rt_cols = st.columns([1, 1, 1])
+            min_adj = rotation_data.get("minutes_adjustment", 1.0)
+            rt_cols[0].metric(
+                "Minutes Adj",
+                f"{min_adj:.2f}x",
+                delta=f"{(min_adj - 1) * 100:+.1f}%" if min_adj != 1.0 else "Stable",
+                delta_color="normal" if min_adj > 1.0 else ("inverse" if min_adj < 1.0 else "off"),
+            )
+            role_changed = rotation_data.get("role_change_detected", False)
+            if role_changed:
+                change_type = rotation_data.get("change_type", "none").replace("_", " → ").title()
+                rt_cols[1].metric("Role Change", f"⚠️ {change_type}")
+                rt_cols[2].metric(
+                    "Minutes Shift",
+                    f"{rotation_data.get('change_magnitude', 0):+.1f} min",
+                    delta=f"{rotation_data.get('minutes_before', 0):.0f} → "
+                          f"{rotation_data.get('minutes_after', 0):.0f}",
+                )
+            else:
+                rt_cols[1].metric("Role Change", "✅ None")
+                rt_cols[2].metric("Status", "Stable rotation")
+
+        # Player Efficiency
+        eff = result.get("efficiency", {})
+        if eff and "error" not in eff:
+            st.divider()
+            st.markdown("**Player Efficiency Profile**")
+            eff_cols = st.columns([1, 1, 1, 1])
+            eff_cols[0].metric("True Shooting", f"{eff.get('ts_pct', 0):.1%}")
+            eff_cols[1].metric("eFG%", f"{eff.get('efg_pct', 0):.1%}")
+            eff_cols[2].metric("Usage Rate", f"{eff.get('usage_rate', 0):.1f}%")
+            eff_cols[3].metric("Efficiency Tier", eff.get("efficiency_tier", "N/A"))
+
+            epm = eff.get("estimated_epm", {})
+            raptor = eff.get("estimated_raptor", {})
+            if epm or raptor:
+                adv_cols = st.columns([1, 1, 1, 1])
+                if epm:
+                    adv_cols[0].metric("EPM Total", f"{epm.get('total', 0):+.1f}")
+                    adv_cols[1].metric("EPM Percentile", f"{epm.get('percentile', 50):.0f}th")
+                if raptor:
+                    adv_cols[2].metric("RAPTOR Total", f"{raptor.get('raptor_total', 0):+.1f}")
+                    adv_cols[3].metric("Est. WAR", f"{raptor.get('war', 0):.1f}")
+
+    # ══════════════════════════════════════════════════════════════
+    # TAB 2: Predictions & Analysis
+    # ══════════════════════════════════════════════════════════════
+    with tab_pred:
+        # TL;DR
+        if tldr:
+            st.info(f"**TL;DR:** {tldr}")
+
+        # Simulation
+        st.subheader("🎲 Simulation Results")
+        sim_cols = st.columns([1, 1, 1, 1])
+        sim_cols[0].metric("Simulated Mean", f"{sim.get('simulated_mean', 0):.1f}")
+        sim_cols[1].metric("P(Over)", f"{sim.get('probability_over', 0):.1%}")
+        sim_cols[2].metric(
+            "90% CI",
+            f"{sim.get('ci_90_low', 0):.1f} – {sim.get('ci_90_high', 0):.1f}",
+        )
+        sim_cols[3].metric("Sims Run", sim.get("simulations_run", 0))
+
+        sim_detail_cols = st.columns([1, 1, 1])
+        sim_detail_cols[0].metric("10th %ile", f"{sim.get('percentile_10', 0):.1f}")
+        sim_detail_cols[1].metric("50th %ile", f"{sim.get('percentile_50', 0):.1f}")
+        sim_detail_cols[2].metric("90th %ile", f"{sim.get('percentile_90', 0):.1f}")
+
+        st.divider()
+
+        # Directional Forces
+        st.subheader("⚡ Directional Forces")
+        over_forces = forces.get("over_forces", [])
+        under_forces = forces.get("under_forces", [])
+
+        force_c1, force_c2 = st.columns(2)
+        with force_c1:
+            st.markdown("**🟢 OVER Forces**")
+            if over_forces:
+                for f in over_forces:
+                    name = f.get("name", f.get("force_name", "Unknown"))
+                    strength = f.get("strength", f.get("magnitude", 0))
+                    st.text(f"  ↑ {name}: {strength:.2f}")
+            else:
+                st.caption("No OVER forces detected.")
+
+        with force_c2:
+            st.markdown("**🔴 UNDER Forces**")
+            if under_forces:
+                for f in under_forces:
+                    name = f.get("name", f.get("force_name", "Unknown"))
+                    strength = f.get("strength", f.get("magnitude", 0))
+                    st.text(f"  ↓ {name}: {strength:.2f}")
+            else:
+                st.caption("No UNDER forces detected.")
+
+        # Game Script
+        game_script = result.get("game_script", {})
+        if game_script and "error" not in game_script:
+            st.divider()
+            st.subheader("🎬 Game Script Simulation")
+            gs_cols = st.columns([1, 1, 1, 1])
+            gs_cols[0].metric(
+                "Blended Mean",
+                f"{game_script.get('blended_mean', 0):.1f}",
+                delta=f"Script: {game_script.get('game_script_mean', 0):.1f}",
+            )
+            gs_cols[1].metric("Flat Mean", f"{game_script.get('flat_mean', 0):.1f}")
+            gs_cols[2].metric("Blowout Rate", f"{game_script.get('blowout_game_rate', 0):.1%}")
+            gs_cols[3].metric("Player Tier", game_script.get("player_tier", "rotation").title())
+            st.caption(
+                f"Blend: {game_script.get('blend_weight', 0.3):.0%} game-script "
+                f"+ {1 - game_script.get('blend_weight', 0.3):.0%} flat simulation."
+            )
+
+        # Distribution Cross-Check
+        dist_check = result.get("distribution_check", {})
+        if dist_check and "error" not in dist_check:
+            st.divider()
+            st.subheader("📐 Distribution Cross-Check")
+            dc_cols = st.columns([1, 1, 1])
+            dc_cols[0].metric(
+                "Analytical P(Over)",
+                f"{dist_check.get('analytical_probability', 0):.1%}",
+            )
+            dc_cols[1].metric(
+                "Monte Carlo P(Over)",
+                f"{dist_check.get('monte_carlo_probability', 0):.1%}",
+            )
+            delta_val = dist_check.get("delta", 0)
+            dc_cols[2].metric(
+                "Delta",
+                f"{delta_val:.1%}",
+                delta="Agreement" if delta_val < 0.05 else "Divergence",
+                delta_color="off" if delta_val < 0.05 else "inverse",
+            )
+            if delta_val >= 0.05:
+                st.caption(
+                    "⚠️ Analytical and Monte Carlo probabilities differ by ≥5%.  "
+                    "This may indicate unusual stat distribution or high variance."
+                )
+
+        # Full Explanation
+        with st.expander("📝 Full Explanation", expanded=False):
+            for key in [
+                "average_vs_line", "matchup_explanation", "pace_explanation",
+                "home_away_explanation", "rest_explanation", "vegas_explanation",
+                "projection_explanation", "simulation_narrative", "forces_summary",
+                "recent_form_explanation", "verdict",
+            ]:
+                text = explanation.get(key)
+                if text:
+                    st.markdown(f"**{key.replace('_', ' ').title()}:** {text}")
+
+    # ══════════════════════════════════════════════════════════════
+    # TAB 3: Bet Sizing & Verdict
+    # ══════════════════════════════════════════════════════════════
+    with tab_bet:
+        # Joseph M Smith's verdict (prominent in this tab)
+        if verdict_text:
+            st.markdown(get_verdict_banner_html(verdict_text), unsafe_allow_html=True)
+
+        st.subheader("💰 Bankroll & Sizing")
+        bet_cols = st.columns([1, 1, 1, 1])
+        bet_cols[0].metric(
+            "Kelly Sizing",
+            bankroll.get("recommended_pct", "0.00%"),
+            delta=bankroll.get("kelly_mode", "quarter").title(),
+        )
+        regime_label = f"{'⚠️ ' if regime_changed else '✅ '}{regime_dir.title()}"
+        bet_cols[1].metric(
+            "Regime",
+            regime_label,
+            delta=f"Magnitude: {regime.get('magnitude', 0.0):.1f}" if regime_changed else "Stable",
+            delta_color="off" if not regime_changed else ("normal" if regime_dir == "up" else "inverse"),
+        )
+        bet_cols[2].metric(
+            "Payout",
+            f"{bankroll.get('payout_multiplier', 1.909):.3f}x",
+        )
+        if kelly_frac > 0:
+            example_bet = round(kelly_frac * EXAMPLE_BANKROLL, 2)
+            bet_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", f"${example_bet:.2f}")
         else:
-            st.info("No draft history data.")
+            bet_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", "No bet")
+
+        # Risk factors
+        risk_factors = explanation.get("risk_factors", [])
+        if risk_factors:
+            st.divider()
+            st.subheader("⚠️ Risk Factors")
+            for rf in risk_factors:
+                st.warning(rf)
+
+        avoid_reasons = conf.get("avoid_reasons", [])
+        if avoid_reasons:
+            st.error("**Avoid Reasons:** " + " • ".join(avoid_reasons))
+
+        # Save Pick button
+        st.divider()
+        if st.button("💾 Save Pick", key="save_pick_btn", use_container_width=True):
+            save_data = {
+                "player_id": int(player_id),
+                "player_name": player_name,
+                "team": result.get("team", ""),
+                "opponent": result.get("opponent", ""),
+                "stat_type": stat_type,
+                "prop_line": float(prop_line),
+                "direction": direction,
+                "model_probability": model_prob,
+                "edge_pct": edge,
+                "confidence_score": score,
+                "tier": tier,
+                "kelly_fraction": kelly_frac,
+                "recommended_bet": round(kelly_frac * EXAMPLE_BANKROLL, 2),
+                "regime_flag": regime_dir,
+                "platform": platform,
+                "vegas_spread": float(vegas_spread),
+                "game_total": float(game_total),
+            }
+            save_result = save_pick(save_data)
+            if save_result.get("status") == "saved":
+                st.success(f"✅ Pick saved (ID: {save_result.get('pick_id')})")
+            else:
+                st.error(f"Failed to save: {save_result.get('message', 'Unknown error')}")
+
+    # Close the card divs
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pick History page (Phase 3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_TIER_EMOJI: dict[str, str] = {
+    "Platinum": "💎",
+    "Gold": "🥇",
+    "Silver": "🥈",
+    "Bronze": "🥉",
+    "Avoid": "⛔",
+}
+
+_RESULT_EMOJI: dict[str, str] = {
+    "hit": "✅",
+    "miss": "❌",
+    "push": "➖",
+}
+
+
+def _page_pick_history() -> None:
+    """Display saved picks with performance tracking."""
+
+    st.title("📋 Pick History")
+    st.caption("Track your saved prop analyses and record outcomes.")
+
+    picks = get_pick_history(limit=100)
+
+    if not picks:
+        st.info("No saved picks yet.  Use the **Prop Analyzer** to analyze and save picks.")
+        return
+
+    # ── Summary stats ───────────────────────────────────────────────
+    total = len(picks)
+    hits = sum(1 for p in picks if p.get("result") == "hit")
+    misses = sum(1 for p in picks if p.get("result") == "miss")
+    pushes = sum(1 for p in picks if p.get("result") == "push")
+    pending = total - hits - misses - pushes
+    decided = hits + misses
+    win_rate = (hits / decided * 100) if decided > 0 else 0.0
+
+    sum_cols = st.columns(6)
+    sum_cols[0].metric("Total Picks", total)
+    sum_cols[1].metric("Hits", f"✅ {hits}")
+    sum_cols[2].metric("Misses", f"❌ {misses}")
+    sum_cols[3].metric("Pushes", f"➖ {pushes}")
+    sum_cols[4].metric("Pending", f"⏳ {pending}")
+    sum_cols[5].metric("Win Rate", f"{win_rate:.1f}%" if decided > 0 else "N/A")
+
+    # ── Tier breakdown ──────────────────────────────────────────────
+    if decided > 0:
+        st.divider()
+        st.subheader("📊 Performance by Tier")
+        tiers_seen: dict[str, dict[str, int]] = {}
+        for p in picks:
+            t = p.get("tier", "Bronze")
+            if t not in tiers_seen:
+                tiers_seen[t] = {"hits": 0, "misses": 0, "total": 0}
+            tiers_seen[t]["total"] += 1
+            if p.get("result") == "hit":
+                tiers_seen[t]["hits"] += 1
+            elif p.get("result") == "miss":
+                tiers_seen[t]["misses"] += 1
+
+        tier_cols = st.columns(min(len(tiers_seen), 5))
+        sorted_tiers = sorted(
+            tiers_seen.items(),
+            key=lambda x: -x[1].get("total", 0),
+        )
+        for i, (tier_name, counts) in enumerate(sorted_tiers):
+            tier_decided = counts["hits"] + counts["misses"]
+            tier_wr = (counts["hits"] / tier_decided * 100) if tier_decided > 0 else 0.0
+            emoji = _TIER_EMOJI.get(tier_name, "🥉")
+            tier_cols[i % len(tier_cols)].metric(
+                f"{emoji} {tier_name}",
+                f"{tier_wr:.0f}% WR" if tier_decided > 0 else "N/A",
+                delta=f"{counts['hits']}/{tier_decided} decided" if tier_decided > 0 else f"{counts['total']} pending",
+            )
+
+    st.divider()
+
+    # ── Pick table ──────────────────────────────────────────────────
+    st.subheader("🗂️ All Picks")
+
+    for pick in picks:
+        pick_id = pick.get("pick_id", "?")
+        p_name = pick.get("player_name", "Unknown")
+        p_tier = pick.get("tier", "Bronze")
+        p_dir = pick.get("direction", "?")
+        p_stat = pick.get("stat_type", "?")
+        p_line = pick.get("prop_line", 0)
+        p_conf = pick.get("confidence_score", 0)
+        p_edge = pick.get("edge_pct", 0)
+        p_kelly = pick.get("kelly_fraction", 0)
+        p_result = pick.get("result")
+        p_date = pick.get("pick_date", "?")
+        p_opp = pick.get("opponent", "?")
+        p_regime = pick.get("regime_flag", "stable")
+
+        tier_emoji = _TIER_EMOJI.get(p_tier, "🥉")
+        result_emoji = _RESULT_EMOJI.get(p_result, "⏳") if p_result else "⏳"
+        dir_icon = "🟢" if p_dir == "OVER" else "🔴"
+
+        with st.expander(
+            f"{result_emoji} {tier_emoji} **{p_name}** — {p_stat.upper()} "
+            f"{dir_icon} {p_dir} {p_line}  •  vs {p_opp}  •  {p_date}",
+            expanded=False,
+        ):
+            det_cols = st.columns([1, 1, 1, 1, 1])
+            det_cols[0].metric("Confidence", f"{p_conf:.0f}/100")
+            det_cols[1].metric("Edge", f"{p_edge:+.1f}%")
+            det_cols[2].metric("Kelly", f"{p_kelly * 100:.2f}%")
+            det_cols[3].metric("Regime", p_regime.title())
+            det_cols[4].metric("Platform", pick.get("platform", "?").title())
+
+            if not p_result:
+                st.caption("Record outcome:")
+                res_cols = st.columns(4)
+                if res_cols[0].button("✅ Hit", key=f"hit_{pick_id}"):
+                    update_pick_result(int(pick_id), "hit")
+                    st.rerun()
+                if res_cols[1].button("❌ Miss", key=f"miss_{pick_id}"):
+                    update_pick_result(int(pick_id), "miss")
+                    st.rerun()
+                if res_cols[2].button("➖ Push", key=f"push_{pick_id}"):
+                    update_pick_result(int(pick_id), "push")
+                    st.rerun()
+            else:
+                actual = pick.get("actual_value")
+                if actual is not None:
+                    st.text(f"  Actual value: {actual}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# PAGE: BET TRACKER
+# ─────────────────────────────────────────────────────────────────────────
+
+_TRACKER_STAT_TYPES = [
+    "points", "rebounds", "assists", "threes",
+    "steals", "blocks", "turnovers",
+    "pts+reb", "pts+ast", "reb+ast", "pts+reb+ast",
+]
+
+
+def _page_bet_tracker() -> None:
+    """Full bet tracker with summary, logging, and results management."""
+    st.title("📈 Bet Tracker")
+    st.caption("Track model performance • Log bets • Record results")
+
+    # ── Summary Cards ─────────────────────────────────────────
+    stats = get_model_performance_stats()
+    summary = stats.get("summary", {})
+    st.markdown(
+        get_summary_cards_html(
+            total_bets=summary.get("total_bets", 0),
+            wins=summary.get("wins", 0),
+            losses=summary.get("losses", 0),
+            pushes=summary.get("pushes", 0),
+            pending=summary.get("pending", 0),
+            win_rate=summary.get("win_rate", 0.0),
+        ),
+        unsafe_allow_html=True,
+    )
+
+    # ── Tabs ──────────────────────────────────────────────────
+    tab_bets, tab_log, tab_perf = st.tabs([
+        "📋 My Bets", "➕ Log Bet", "📊 Performance",
+    ])
+
+    # ── Tab: My Bets ──────────────────────────────────────────
+    with tab_bets:
+        bets = load_all_bets(limit=100)
+        if not bets:
+            st.info("No bets logged yet. Use the **Log Bet** tab or run the **Prop Analyzer**.")
+        else:
+            for bet in bets:
+                bid = bet.get("bet_id", "?")
+                name = bet.get("player_name", "Unknown")
+                stat = bet.get("stat_type", "?")
+                line = bet.get("prop_line", 0)
+                direction = bet.get("direction", "?")
+                tier = bet.get("confidence_tier", "")
+                score = bet.get("confidence_score", 0)
+                edge = bet.get("edge_pct", 0)
+                result_val = bet.get("result")
+                bet_date = bet.get("bet_date", "?")
+                opp = bet.get("opponent", "?")
+                plat = bet.get("platform", "?")
+                src = bet.get("source", "manual")
+
+                dir_icon = "🟢" if direction == "OVER" else "🔴"
+                tier_emoji = {"Platinum": "💎", "Gold": "🥇", "Silver": "🥈", "Bronze": "🥉"}.get(tier, "")
+                result_emoji = {"win": "✅", "loss": "❌", "push": "➖"}.get(result_val, "⏳")
+
+                with st.expander(
+                    f"{result_emoji} {tier_emoji} **{name}** — {stat.upper()} "
+                    f"{dir_icon} {direction} {line}  •  vs {opp}  •  {bet_date}",
+                    expanded=False,
+                ):
+                    det = st.columns([1, 1, 1, 1, 1])
+                    det[0].metric("Confidence", f"{score:.0f}/100")
+                    det[1].metric("Edge", f"{edge:+.1f}%")
+                    det[2].metric("Platform", plat)
+                    det[3].metric("Tier", tier or "—")
+                    det[4].metric("Source", src.title())
+
+                    if not result_val:
+                        st.caption("Record outcome:")
+                        res = st.columns(4)
+                        if res[0].button("✅ Win", key=f"bt_win_{bid}"):
+                            record_bet_result(int(bid), "win")
+                            st.rerun()
+                        if res[1].button("❌ Loss", key=f"bt_loss_{bid}"):
+                            record_bet_result(int(bid), "loss")
+                            st.rerun()
+                        if res[2].button("➖ Push", key=f"bt_push_{bid}"):
+                            record_bet_result(int(bid), "push")
+                            st.rerun()
+                    else:
+                        actual = bet.get("actual_value")
+                        if actual is not None:
+                            st.text(f"  Actual value: {actual}")
+
+    # ── Tab: Log Bet ──────────────────────────────────────────
+    with tab_log:
+        st.subheader("➕ Log a New Bet")
+        with st.form("log_bet_form", clear_on_submit=True):
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                lb_player = st.text_input("Player Name", placeholder="e.g. LeBron James")
+                lb_stat = st.selectbox("Stat Type", _TRACKER_STAT_TYPES)
+                lb_line = st.number_input("Prop Line", min_value=0.5, step=0.5, value=20.0)
+            with fc2:
+                lb_direction = st.selectbox("Direction", ["OVER", "UNDER"])
+                lb_platform = st.selectbox("Platform", sorted(VALID_PLATFORMS))
+                lb_opponent = st.text_input("Opponent (optional)", placeholder="e.g. BOS")
+
+            lb_notes = st.text_input("Notes (optional)")
+            submitted = st.form_submit_button("📝 Log Bet", use_container_width=True)
+
+        if submitted:
+            if not lb_player or not lb_player.strip():
+                st.error("Player name is required.")
+            else:
+                res = log_new_bet(
+                    player_name=lb_player,
+                    stat_type=lb_stat,
+                    prop_line=float(lb_line),
+                    direction=lb_direction,
+                    platform=lb_platform,
+                    opponent=lb_opponent,
+                    notes=lb_notes,
+                    source="manual",
+                )
+                if res.get("success"):
+                    st.success(f"Bet logged! (ID: {res['bet_id']})")
+                else:
+                    st.error(res.get("error", "Failed to log bet."))
+
+    # ── Tab: Performance ──────────────────────────────────────
+    with tab_perf:
+        st.subheader("📊 Performance by Tier")
+        tier_data = stats.get("by_tier", [])
+        if tier_data:
+            tc = st.columns(min(len(tier_data), 4))
+            for i, t in enumerate(tier_data):
+                tier_name = t.get("tier", "?")
+                wr = t.get("win_rate", 0)
+                decided = t.get("wins", 0) + t.get("losses", 0)
+                emoji = {"Platinum": "💎", "Gold": "🥇", "Silver": "🥈", "Bronze": "🥉"}.get(tier_name, "🥉")
+                tc[i % len(tc)].metric(
+                    f"{emoji} {tier_name}",
+                    f"{wr:.0f}% WR" if decided > 0 else "N/A",
+                    delta=f"{t.get('wins', 0)}/{decided} decided" if decided > 0 else f"{t.get('total', 0)} pending",
+                )
+        else:
+            st.info("No tier data yet.")
+
+        st.divider()
+        st.subheader("📊 Performance by Stat Type")
+        stat_data = stats.get("by_stat", [])
+        if stat_data:
+            _show_df(stat_data, columns=["stat_type", "total", "wins", "losses", "pending", "win_rate"])
+        else:
+            st.info("No stat data yet.")
+
+        st.divider()
+        st.subheader("📊 Performance by Platform")
+        plat_data = stats.get("by_platform", [])
+        if plat_data:
+            _show_df(plat_data, columns=["platform", "total", "wins", "losses", "pending", "win_rate"])
+        else:
+            st.info("No platform data yet.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1616,6 +2117,9 @@ _PAGE_DISPATCH: dict[str, Callable[[], None]] = {
     "leaders": _page_leaders,
     "defense": _page_defense,
     "more": _page_more,
+    "prop_analyzer": _page_prop_analyzer,
+    "pick_history": _page_pick_history,
+    "bet_tracker": _page_bet_tracker,
 }
 
 _page_fn = _PAGE_DISPATCH.get(st.session_state.page)
