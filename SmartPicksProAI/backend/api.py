@@ -1701,6 +1701,40 @@ def update_pick_result(body: UpdatePickResultRequest) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ML Pipeline endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/picks/today")
+def get_todays_picks():
+    """Run the ML pipeline and return today's player prop predictions."""
+    try:
+        from engine.pipeline.run_pipeline import run_full_pipeline
+        context = run_full_pipeline()
+        return {
+            "date": context.get("date_str"),
+            "predictions": context.get("predictions", []),
+            "evaluation": context.get("evaluation", {}),
+            "errors": context.get("errors", []),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/train-models")
+def train_models_endpoint():
+    """Trigger ML model training for pts, reb, ast."""
+    try:
+        from engine.models.train import train_models
+        results = {}
+        for stat in ["pts", "reb", "ast"]:
+            results[stat] = train_models(stat)
+        return {"status": "success", "results": results}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

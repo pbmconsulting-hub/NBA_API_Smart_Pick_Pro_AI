@@ -1,0 +1,22 @@
+[2026-04-03 22:23:36] [DEBUG] [smartpicks_pro.engine.models.ridge_model] scikit-learn not installed; RidgeModel will be a no-op
+[2026-04-03 22:23:36] [DEBUG] [smartpicks_pro.engine.models.xgboost_model] xgboost not installed; XGBoostModel will be a no-op
+[2026-04-03 22:23:36] [DEBUG] [smartpicks_pro.engine.models.catboost_model] catboost not installed; CatBoostModel will be a no-op
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.run_pipeline] === Pipeline START — date=2026-04-03 ===
+[2026-04-03 22:23:50] [DEBUG] [smartpicks_pro.engine.pipeline.step_1_ingest] _read_todays_games failed: no such table: Games
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.step_1_ingest] Ingested 0 today's games
+[2026-04-03 22:23:50] [DEBUG] [smartpicks_pro.engine.pipeline.step_1_ingest] _read_player_stats failed: no such table: Player_Game_Logs
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.step_1_ingest] Ingested 0 player stat rows
+[2026-04-03 22:23:50] [DEBUG] [smartpicks_pro.engine.pipeline.step_1_ingest] Could not persist raw data: No module named 'pandas'
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.run_pipeline]   [OK] step_1_ingest completed in 0.00s
+[2026-04-03 22:23:50] [DEBUG] [smartpicks_pro.engine.pipeline.step_2_clean] pandas not available, skipping clean: No module named 'pandas'
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.run_pipeline]   [OK] step_2_clean completed in 0.00s
+[2026-04-03 22:23:50] [DEBUG] [smartpicks_pro.engine.pipeline.step_3_features] Feature engineering error: No module named 'pandas'
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.run_pipeline]   [OK] step_3_features completed in 0.00s
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.step_4_predict] Generated 0 predictions
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.run_pipeline]   [OK] step_4_predict completed in 0.00s
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.step_5_evaluate] No actuals available for evaluation (expected on prediction-only runs)
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.run_pipeline]   [OK] step_5_evaluate completed in 0.00s
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.step_6_export] Exported 0 predictions → /home/runner/work/NBA_API_Smart_Pick_Pro_AI/NBA_API_Smart_Pick_Pro_AI/SmartPicksProAI/data/processed/predictions_2026-04-03.json
+[2026-04-03 22:23:50] [DEBUG] [smartpicks_pro.engine.pipeline.step_6_export] Parquet export skipped: No module named 'pandas'
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.run_pipeline]   [OK] step_6_export completed in 0.00s
+[2026-04-03 22:23:50] [INFO] [smartpicks_pro.engine.pipeline.run_pipeline] === Pipeline END — total=0.01s errors=0 ===

@@ -1,0 +1,81 @@
+"""utils/constants.py – Centralized NBA constants."""
+
+NBA_TEAMS = {
+    "ATL": "Atlanta Hawks",
+    "BOS": "Boston Celtics",
+    "BKN": "Brooklyn Nets",
+    "CHA": "Charlotte Hornets",
+    "CHI": "Chicago Bulls",
+    "CLE": "Cleveland Cavaliers",
+    "DAL": "Dallas Mavericks",
+    "DEN": "Denver Nuggets",
+    "DET": "Detroit Pistons",
+    "GSW": "Golden State Warriors",
+    "HOU": "Houston Rockets",
+    "IND": "Indiana Pacers",
+    "LAC": "Los Angeles Clippers",
+    "LAL": "Los Angeles Lakers",
+    "MEM": "Memphis Grizzlies",
+    "MIA": "Miami Heat",
+    "MIL": "Milwaukee Bucks",
+    "MIN": "Minnesota Timberwolves",
+    "NOP": "New Orleans Pelicans",
+    "NYK": "New York Knicks",
+    "OKC": "Oklahoma City Thunder",
+    "ORL": "Orlando Magic",
+    "PHI": "Philadelphia 76ers",
+    "PHX": "Phoenix Suns",
+    "POR": "Portland Trail Blazers",
+    "SAC": "Sacramento Kings",
+    "SAS": "San Antonio Spurs",
+    "TOR": "Toronto Raptors",
+    "UTA": "Utah Jazz",
+    "WAS": "Washington Wizards",
+}
+
+TEAM_CITIES = {
+    "ATL": "Atlanta",
+    "BOS": "Boston",
+    "BKN": "Brooklyn",
+    "CHA": "Charlotte",
+    "CHI": "Chicago",
+    "CLE": "Cleveland",
+    "DAL": "Dallas",
+    "DEN": "Denver",
+    "DET": "Detroit",
+    "GSW": "San Francisco",
+    "HOU": "Houston",
+    "IND": "Indianapolis",
+    "LAC": "Los Angeles",
+    "LAL": "Los Angeles",
+    "MEM": "Memphis",
+    "MIA": "Miami",
+    "MIL": "Milwaukee",
+    "MIN": "Minneapolis",
+    "NOP": "New Orleans",
+    "NYK": "New York",
+    "OKC": "Oklahoma City",
+    "ORL": "Orlando",
+    "PHI": "Philadelphia",
+    "PHX": "Phoenix",
+    "POR": "Portland",
+    "SAC": "Sacramento",
+    "SAS": "San Antonio",
+    "TOR": "Toronto",
+    "UTA": "Salt Lake City",
+    "WAS": "Washington",
+}
+
+STAT_COLUMNS = [
+    "PTS", "REB", "AST", "STL", "BLK", "TOV",
+    "FGM", "FGA", "FG_PCT",
+    "FG3M", "FG3A", "FG3_PCT",
+    "FTM", "FTA", "FT_PCT",
+    "OREB", "DREB",
+    "PF", "MIN", "PLUS_MINUS",
+]
+
+DEFAULT_SEASON = "2025-26"
+
+LEAGUE_AVG_PACE = 100.0
+LEAGUE_AVG_DRTG = 110.0
