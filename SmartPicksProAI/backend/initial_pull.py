@@ -63,9 +63,8 @@ DB_PATH = setup_db.DB_PATH
 SEASON = "2025-26"
 
 # When True, skip all data-pull sections that come after Player_Career_Stats.
-# This includes shot-chart fetches, per-game box-score loops (advanced,
-# scoring, usage, tracking, matchups), per-player dashboard/split fetches
-# beyond career stats, historical/context table population, and matchup data.
+# This includes shot-chart fetches and per-game box-score loops (advanced,
+# scoring, usage, tracking, matchups).
 # Set to False when the app is upgraded to use this data.
 SKIP_EXTENDED_PULLS = True
 
