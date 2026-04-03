@@ -1471,7 +1471,7 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         }
     except Exception as exc:
         logger.warning("Game-script simulation failed: %s", exc)
-        game_script = {"error": str(exc)}
+        game_script = {"error": "game_script_unavailable"}
 
     # ── Step 8: Matchup history (Phase 4) ──────────────────────────
     try:
@@ -1500,7 +1500,7 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         }
     except Exception as exc:
         logger.warning("Matchup history failed: %s", exc)
-        matchup_history = {"cold_start": True, "error": str(exc)}
+        matchup_history = {"cold_start": True, "error": "matchup_history_unavailable"}
 
     # ── Step 9: Rotation / minutes trend (Phase 4) ─────────────────
     try:
@@ -1516,7 +1516,7 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         }
     except Exception as exc:
         logger.warning("Rotation tracker failed: %s", exc)
-        rotation = {"role_change_detected": False, "minutes_adjustment": 1.0, "error": str(exc)}
+        rotation = {"role_change_detected": False, "minutes_adjustment": 1.0, "error": "rotation_unavailable"}
 
     # ── Step 10: Distribution cross-check (Phase 4) ────────────────
     try:
@@ -1533,14 +1533,14 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         }
     except Exception as exc:
         logger.warning("Distribution cross-check failed: %s", exc)
-        distribution_check = {"error": str(exc)}
+        distribution_check = {"error": "distribution_check_unavailable"}
 
     # ── Step 11: Player efficiency profile (Phase 4) ───────────────
     try:
         efficiency = calculate_player_efficiency_profile(player_data)
     except Exception as exc:
         logger.warning("Efficiency profile failed: %s", exc)
-        efficiency = {"error": str(exc)}
+        efficiency = {"error": "efficiency_unavailable"}
 
     # ── Step 12: Explanation ────────────────────────────────────────
     try:
