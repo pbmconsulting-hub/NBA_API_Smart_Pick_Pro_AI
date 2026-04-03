@@ -38,9 +38,18 @@ import setup_db
 
 # Ensure the SmartPicksProAI package root is importable so that the
 # ``engine`` package can be loaded regardless of working directory.
+# The ``backend/utils.py`` helper may already be cached in sys.modules
+# as ``utils`` (loaded by ``data_updater``).  We stash that reference
+# and re-register it under ``backend.utils`` so the ``utils/`` *package*
+# at the SmartPicksProAI root can be imported normally by engine code.
 _PACKAGE_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PACKAGE_ROOT not in sys.path:
     sys.path.insert(0, _PACKAGE_ROOT)
+_backend_utils = sys.modules.pop("utils", None)
+if _backend_utils is not None and not hasattr(_backend_utils, "__path__"):
+    # Re-register the single-file backend helper under a distinct name
+    # so existing references (data_updater.utils) keep working.
+    sys.modules["backend_utils"] = _backend_utils
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1697,6 +1706,40 @@ def update_pick_result(body: UpdatePickResultRequest) -> dict:
         return {"status": "updated", "pick_id": body.pick_id}
     except sqlite3.Error as exc:
         logger.exception("Failed to update pick result.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# ML Pipeline endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/picks/today")
+def get_todays_picks():
+    """Run the ML pipeline and return today's player prop predictions."""
+    try:
+        from engine.pipeline.run_pipeline import run_full_pipeline
+        context = run_full_pipeline()
+        return {
+            "date": context.get("date_str"),
+            "predictions": context.get("predictions", []),
+            "evaluation": context.get("evaluation", {}),
+            "errors": context.get("errors", []),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/train-models")
+def train_models_endpoint():
+    """Trigger ML model training for pts, reb, ast."""
+    try:
+        from engine.models.train import train_models
+        results = {}
+        for stat in ["pts", "reb", "ast"]:
+            results[stat] = train_models(stat)
+        return {"status": "success", "results": results}
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
