@@ -51,7 +51,7 @@ from nba_api.stats.endpoints import (
 from nba_api.stats.static import teams as static_teams
 
 import setup_db
-from utils import parse_matchup_abbreviations
+from utils import get_new_rows, parse_matchup_abbreviations, upsert_dataframe
 
 logging.basicConfig(
     level=logging.INFO,
@@ -531,16 +531,7 @@ def load_players(players: pd.DataFrame, conn: sqlite3.Connection) -> None:
         players: DataFrame produced by :func:`build_players_df`.
         conn: Open SQLite connection.
     """
-    if players.empty:
-        logger.info("Players table: no rows to upsert.")
-        return
-    cursor = conn.cursor()
-    cols = list(players.columns)
-    placeholders = ", ".join("?" for _ in cols)
-    col_names = ", ".join(cols)
-    sql = f"INSERT OR REPLACE INTO Players ({col_names}) VALUES ({placeholders})"
-    cursor.executemany(sql, players.itertuples(index=False, name=None))
-    logger.info("Players table: upserted %d rows.", len(players))
+    upsert_dataframe(players, "Players", conn)
 
 
 def seed_teams_from_api(conn: sqlite3.Connection) -> None:
@@ -603,13 +594,7 @@ def load_logs(logs: pd.DataFrame, conn: sqlite3.Connection) -> None:
     existing = pd.read_sql(
         "SELECT player_id, game_id FROM Player_Game_Logs", conn
     )
-    if existing.empty:
-        new_rows = logs
-    else:
-        merged = logs.merge(
-            existing, on=["player_id", "game_id"], how="left", indicator=True
-        )
-        new_rows = logs[merged["_merge"] == "left_only"].copy()
+    new_rows = get_new_rows(logs, existing, on_cols=["player_id", "game_id"])
 
     if new_rows.empty:
         logger.info("Player_Game_Logs table: no new rows to insert.")
@@ -633,13 +618,7 @@ def load_team_game_stats(
     existing = pd.read_sql(
         "SELECT game_id, team_id FROM Team_Game_Stats", conn
     )
-    if existing.empty:
-        new_rows = stats
-    else:
-        merged = stats.merge(
-            existing, on=["game_id", "team_id"], how="left", indicator=True
-        )
-        new_rows = stats[merged["_merge"] == "left_only"].copy()
+    new_rows = get_new_rows(stats, existing, on_cols=["game_id", "team_id"])
 
     if new_rows.empty:
         logger.info("Team_Game_Stats table: no new rows to insert.")

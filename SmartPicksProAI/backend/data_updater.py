@@ -28,7 +28,7 @@ from nba_api.stats.endpoints import LeagueGameLog, ScoreboardV3
 
 import initial_pull
 import setup_db
-from utils import parse_matchup_abbreviations
+from utils import get_new_rows, parse_matchup_abbreviations, upsert_dataframe
 
 logging.basicConfig(
     level=logging.INFO,

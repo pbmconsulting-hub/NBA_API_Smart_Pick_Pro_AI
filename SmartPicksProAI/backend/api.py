@@ -144,8 +144,10 @@ def _get_conn() -> sqlite3.Connection:
     """Open and return a SQLite connection with row_factory set.
 
     .. deprecated::
-        Prefer the :func:`_db` context manager or :func:`_query_rows` /
-        :func:`_query_one` helpers for new endpoints.
+        Use the :func:`_db` context manager, :func:`_query_rows`, or
+        :func:`_query_one` instead.  This function is retained only for
+        the ``data_updater`` write-path (which manages its own connection
+        lifecycle) and will be removed in a future release.
 
     Returns:
         An open :class:`sqlite3.Connection` with ``row_factory`` configured
@@ -173,7 +175,7 @@ def health_check() -> dict:
         with _db() as conn:
             conn.execute("SELECT 1").fetchone()
         return {"status": "ok"}
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.exception("Health check failed.")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -252,59 +254,50 @@ def get_player_last5(player_id: int) -> dict:
         HTTPException 500: On unexpected database errors.
     """
     logger.info("GET /api/players/%d/last5", player_id)
-    conn = _get_conn()
-    try:
-        player_row = conn.execute(
-            "SELECT player_id, first_name, last_name FROM Players WHERE player_id = ?",
-            (player_id,),
-        ).fetchone()
 
-        if player_row is None:
-            raise HTTPException(status_code=404, detail=f"Player {player_id} not found.")
+    player_row = _query_one(
+        "SELECT player_id, first_name, last_name FROM Players WHERE player_id = ?",
+        (player_id,),
+        label="get_player_last5/player",
+    )
+    if player_row is None:
+        raise HTTPException(status_code=404, detail=f"Player {player_id} not found.")
 
-        rows = conn.execute(
-            """
-            SELECT
-                g.game_date,
-                g.season,
-                g.home_abbrev,
-                g.away_abbrev,
-                g.matchup,
-                g.home_score,
-                g.away_score,
-                l.game_id,
-                l.wl,
-                l.min,
-                l.pts, l.reb, l.ast, l.blk, l.stl, l.tov,
-                l.fgm, l.fga, l.fg_pct,
-                l.fg3m, l.fg3a, l.fg3_pct,
-                l.ftm, l.fta, l.ft_pct,
-                l.oreb, l.dreb, l.pf, l.plus_minus
-            FROM Player_Game_Logs l
-            JOIN Games g ON g.game_id = l.game_id
-            WHERE l.player_id = ?
-            ORDER BY g.game_date DESC
-            LIMIT 5
-            """,
-            (player_id,),
-        ).fetchall()
+    games = _query_rows(
+        """
+        SELECT
+            g.game_date,
+            g.season,
+            g.home_abbrev,
+            g.away_abbrev,
+            g.matchup,
+            g.home_score,
+            g.away_score,
+            l.game_id,
+            l.wl,
+            l.min,
+            l.pts, l.reb, l.ast, l.blk, l.stl, l.tov,
+            l.fgm, l.fga, l.fg_pct,
+            l.fg3m, l.fg3a, l.fg3_pct,
+            l.ftm, l.fta, l.ft_pct,
+            l.oreb, l.dreb, l.pf, l.plus_minus
+        FROM Player_Game_Logs l
+        JOIN Games g ON g.game_id = l.game_id
+        WHERE l.player_id = ?
+        ORDER BY g.game_date DESC
+        LIMIT 5
+        """,
+        (player_id,),
+        label="get_player_last5/logs",
+    )
 
-        games = [dict(row) for row in rows]
-
-        return {
-            "player_id": player_row["player_id"],
-            "first_name": player_row["first_name"],
-            "last_name": player_row["last_name"],
-            "games": games,
-            "averages": _compute_stat_averages(games),
-        }
-    except HTTPException:
-        raise
-    except sqlite3.Error as exc:
-        logger.exception("Error fetching last-5 for player %d.", player_id)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        conn.close()
+    return {
+        "player_id": player_row["player_id"],
+        "first_name": player_row["first_name"],
+        "last_name": player_row["last_name"],
+        "games": games,
+        "averages": _compute_stat_averages(games),
+    }
 
 
 @app.get("/api/games/today")
@@ -333,25 +326,19 @@ def get_games_today() -> dict:
     today = date.today().isoformat()
     logger.info("GET /api/games/today — checking for date %s", today)
 
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT game_id, game_date, season, home_team_id, away_team_id, "
-            "home_abbrev, away_abbrev, matchup, home_score, away_score "
-            "FROM Games WHERE game_date = ?",
-            (today,),
-        ).fetchall()
-    except Exception as exc:
-        logger.exception("Database error querying today's games.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        conn.close()
+    rows = _query_rows(
+        "SELECT game_id, game_date, season, home_team_id, away_team_id, "
+        "home_abbrev, away_abbrev, matchup, home_score, away_score "
+        "FROM Games WHERE game_date = ?",
+        (today,),
+        label="get_games_today",
+    )
 
     logger.info("Found %d games in DB for %s.", len(rows), today)
     return {
         "date": today,
         "source": "database",
-        "games": [dict(row) for row in rows],
+        "games": rows,
     }
 
 
@@ -385,7 +372,7 @@ def refresh_data() -> dict:
         )
         logger.info("Refresh complete: %s", message)
         return {"status": "success", "new_records": new_records, "message": message}
-    except Exception as exc:
+    except Exception as exc:  # Broad catch: wraps entire external update pipeline.
         logger.exception("Error during data refresh.")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -473,39 +460,35 @@ def get_team_roster(team_id: int) -> dict:
         HTTPException 500: On unexpected database errors.
     """
     logger.info("GET /api/teams/%d/roster", team_id)
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
+
+    players = _query_rows(
+        """
+        SELECT p.player_id, p.first_name, p.last_name, p.full_name,
+               p.position, p.team_abbreviation
+        FROM Team_Roster r
+        JOIN Players p ON p.player_id = r.player_id
+        WHERE r.team_id = ?
+        ORDER BY p.last_name
+        """,
+        (team_id,),
+        label="get_team_roster",
+    )
+
+    # Fallback: if Team_Roster has no rows for this team, use Players.team_id.
+    if not players:
+        players = _query_rows(
             """
-            SELECT p.player_id, p.first_name, p.last_name, p.full_name,
-                   p.position, p.team_abbreviation
-            FROM Team_Roster r
-            JOIN Players p ON p.player_id = r.player_id
-            WHERE r.team_id = ?
-            ORDER BY p.last_name
+            SELECT player_id, first_name, last_name, full_name,
+                   position, team_abbreviation
+            FROM Players
+            WHERE team_id = ?
+            ORDER BY last_name
             """,
             (team_id,),
-        ).fetchall()
+            label="get_team_roster/fallback",
+        )
 
-        # Fallback: if Team_Roster has no rows for this team, use Players.team_id.
-        if not rows:
-            rows = conn.execute(
-                """
-                SELECT player_id, first_name, last_name, full_name,
-                       position, team_abbreviation
-                FROM Players
-                WHERE team_id = ?
-                ORDER BY last_name
-                """,
-                (team_id,),
-            ).fetchall()
-
-        return {"team_id": team_id, "players": [dict(r) for r in rows]}
-    except Exception as exc:
-        logger.exception("Error fetching roster for team %d.", team_id)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        conn.close()
+    return {"team_id": team_id, "players": players}
 
 
 @app.get("/api/teams/{team_id}/stats")
@@ -543,29 +526,24 @@ def get_team_stats(team_id: int, last_n: int = 10) -> dict:
         HTTPException 500: On unexpected database errors.
     """
     logger.info("GET /api/teams/%d/stats?last_n=%d", team_id, last_n)
-    last_n = max(1, min(last_n, 82))
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            """
-            SELECT tgs.game_id, g.game_date, g.matchup,
-                   tgs.opponent_team_id, tgs.is_home,
-                   tgs.points_scored, tgs.points_allowed,
-                   tgs.pace_est, tgs.ortg_est, tgs.drtg_est
-            FROM Team_Game_Stats tgs
-            JOIN Games g ON g.game_id = tgs.game_id
-            WHERE tgs.team_id = ?
-            ORDER BY g.game_date DESC
-            LIMIT ?
-            """,
-            (team_id, last_n),
-        ).fetchall()
-        return {"team_id": team_id, "games": [dict(r) for r in rows]}
-    except Exception as exc:
-        logger.exception("Error fetching stats for team %d.", team_id)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        conn.close()
+    last_n = max(1, min(last_n, MAX_SEASON_GAMES))
+
+    games = _query_rows(
+        """
+        SELECT tgs.game_id, g.game_date, g.matchup,
+               tgs.opponent_team_id, tgs.is_home,
+               tgs.points_scored, tgs.points_allowed,
+               tgs.pace_est, tgs.ortg_est, tgs.drtg_est
+        FROM Team_Game_Stats tgs
+        JOIN Games g ON g.game_id = tgs.game_id
+        WHERE tgs.team_id = ?
+        ORDER BY g.game_date DESC
+        LIMIT ?
+        """,
+        (team_id, last_n),
+        label="get_team_stats",
+    )
+    return {"team_id": team_id, "games": games}
 
 
 @app.get("/api/defense-vs-position/{team_abbreviation}")
