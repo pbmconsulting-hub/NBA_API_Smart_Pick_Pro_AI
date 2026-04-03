@@ -1,14 +1,12 @@
 """
 app.py
 ------
-Streamlit dashboard for SmartPicksProAI.
+Streamlit dashboard for SmartPicksProAI — Smart Pick Pro AI Edition.
 
-A premium "luxury AI portal" interface for viewing NBA matchups, analysing
-player performance, browsing team rosters, and exploring all data.
+Quantum Edge dark theme with glassmorphism, neon cyan/green glow,
+Orbitron headings, and Joseph M Smith branded assets.
 
-Every game card is clickable — opening a rich detail view with box scores,
-team comparisons, and player lists.  Every player name is clickable —
-opening a deep-dive profile with bio, career, advanced stats, and more.
+Includes: Prop Analyzer, Bet Tracker, Pick History, and full NBA stats.
 
 Start the dashboard::
 
@@ -16,11 +14,43 @@ Start the dashboard::
     streamlit run app.py
 """
 
+import sys
+import os
+import datetime
 import pandas as pd
 import streamlit as st
 
 from typing import Any
 from collections.abc import Callable
+from pathlib import Path
+
+# ── Ensure SmartPicksProAI package root is on sys.path ──────
+_FRONTEND_DIR = Path(__file__).resolve().parent
+_PACKAGE_ROOT = _FRONTEND_DIR.parent
+if str(_PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PACKAGE_ROOT))
+
+from styles.theme import (
+    get_global_css,
+    get_hero_banner_html,
+    get_sidebar_avatar_html,
+    get_sidebar_brand_html,
+    get_summary_cards_html,
+    get_tier_badge_html,
+)
+from tracking.database import initialize_database as _init_tracker_db
+from tracking.bet_tracker import (
+    auto_log_analysis_bets,
+    get_model_performance_stats,
+    log_new_bet,
+    record_bet_result,
+    VALID_PLATFORMS,
+)
+from tracking.database import (
+    load_all_bets,
+    load_analysis_picks,
+    get_performance_by_tier,
+)
 
 from api_service import (
     analyze_prop,
@@ -74,11 +104,14 @@ MAX_SEARCH_RESULTS = 10
 EXAMPLE_BANKROLL = 500.0
 
 st.set_page_config(
-    page_title="SmartPicksProAI",
+    page_title="Smart Pick Pro — NBA Edition",
     page_icon="🏀",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Initialize bet tracker database
+_init_tracker_db()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Session-state navigation
@@ -104,274 +137,10 @@ def _nav(page: str, **kwargs) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Premium luxury + AI portal CSS
+# Quantum Edge Dark Theme (from styles/theme.py)
 # ═══════════════════════════════════════════════════════════════════════════
 
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
-    /* ── Global ───────────────────────────────────────────────── */
-    .stApp {
-        background: linear-gradient(135deg, #0a0e1a 0%, #0d1225 40%, #111830 100%);
-        color: #e0e6f0;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0c1024 0%, #111830 100%);
-        border-right: 1px solid rgba(212, 175, 55, 0.15);
-    }
-
-    /* ── Typography ───────────────────────────────────────────── */
-    h1 {
-        background: linear-gradient(135deg, #d4af37 0%, #f0d060 50%, #d4af37 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        letter-spacing: -0.02em;
-    }
-    h2, h3 {
-        color: #d4af37;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-    }
-    h4 {
-        color: #7eb8da;
-        font-weight: 600;
-    }
-
-    /* ── Glass cards ──────────────────────────────────────────── */
-    .glass-card {
-        background: rgba(18, 25, 50, 0.65);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(212, 175, 55, 0.12);
-        border-radius: 16px;
-        padding: 1.2rem 1.4rem;
-        margin-bottom: 0.8rem;
-        transition: all 0.25s ease;
-    }
-    .glass-card:hover {
-        border-color: rgba(212, 175, 55, 0.35);
-        box-shadow: 0 8px 32px rgba(212, 175, 55, 0.08);
-        transform: translateY(-2px);
-    }
-    .glass-card-sm {
-        background: rgba(18, 25, 50, 0.5);
-        backdrop-filter: blur(8px);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 12px;
-        padding: 0.8rem 1rem;
-        margin-bottom: 0.5rem;
-    }
-
-    /* ── Game cards (clickable) ───────────────────────────────── */
-    .game-tile {
-        background: linear-gradient(135deg, rgba(18, 25, 55, 0.8) 0%, rgba(15, 20, 45, 0.9) 100%);
-        border: 1px solid rgba(212, 175, 55, 0.15);
-        border-radius: 16px;
-        padding: 1.4rem;
-        text-align: center;
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
-    }
-    .game-tile::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0;
-        height: 3px;
-        background: linear-gradient(90deg, transparent, #d4af37, transparent);
-        opacity: 0;
-        transition: opacity 0.3s ease;
-    }
-    .game-tile:hover::before { opacity: 1; }
-    .game-tile:hover {
-        border-color: rgba(212, 175, 55, 0.4);
-        box-shadow: 0 12px 40px rgba(212, 175, 55, 0.1);
-        transform: translateY(-3px);
-    }
-    .game-tile .teams {
-        font-size: 1.15rem;
-        font-weight: 700;
-        color: #ffffff;
-        letter-spacing: 0.02em;
-    }
-    .game-tile .vs { color: #d4af37; margin: 0 0.4rem; }
-    .game-tile .score {
-        font-size: 1.5rem;
-        font-weight: 800;
-        color: #d4af37;
-        margin: 0.4rem 0;
-    }
-    .game-tile .meta {
-        font-size: 0.7rem;
-        color: rgba(255, 255, 255, 0.35);
-        margin-top: 0.5rem;
-    }
-
-    /* ── Metric cards ─────────────────────────────────────────── */
-    [data-testid="stMetric"] {
-        background: rgba(18, 25, 50, 0.6);
-        backdrop-filter: blur(8px);
-        border: 1px solid rgba(212, 175, 55, 0.1);
-        border-radius: 12px;
-        padding: 0.8rem 1rem;
-    }
-    [data-testid="stMetricValue"] {
-        color: #d4af37 !important;
-        font-weight: 700;
-    }
-    [data-testid="stMetricLabel"] {
-        color: rgba(255, 255, 255, 0.5) !important;
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-    }
-
-    /* ── Buttons ──────────────────────────────────────────────── */
-    .stButton > button {
-        background: linear-gradient(135deg, #d4af37 0%, #b8941e 100%);
-        color: #0a0e1a;
-        border: none;
-        border-radius: 10px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        transition: all 0.25s ease;
-    }
-    .stButton > button:hover {
-        background: linear-gradient(135deg, #e6c453 0%, #d4af37 100%);
-        box-shadow: 0 6px 24px rgba(212, 175, 55, 0.25);
-        transform: translateY(-1px);
-    }
-    .stButton > button:active {
-        transform: translateY(0);
-    }
-
-    /* ── Tabs ─────────────────────────────────────────────────── */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 4px;
-        background: rgba(18, 25, 50, 0.3);
-        border-radius: 12px;
-        padding: 4px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background: transparent;
-        border-radius: 8px;
-        color: rgba(255, 255, 255, 0.45);
-        font-weight: 500;
-        padding: 0.5rem 1.2rem;
-        transition: all 0.2s ease;
-    }
-    .stTabs [data-baseweb="tab"]:hover {
-        color: rgba(255, 255, 255, 0.7);
-        background: rgba(212, 175, 55, 0.06);
-    }
-    .stTabs [aria-selected="true"] {
-        background: rgba(212, 175, 55, 0.12) !important;
-        color: #d4af37 !important;
-        font-weight: 600;
-        border-bottom: 2px solid #d4af37;
-    }
-
-    /* ── Data tables ──────────────────────────────────────────── */
-    .stDataFrame { font-size: 0.82rem; }
-    .stDataFrame [data-testid="stDataFrameResizable"] {
-        border: 1px solid rgba(212, 175, 55, 0.08);
-        border-radius: 12px;
-        overflow: hidden;
-    }
-
-    /* ── Layout ───────────────────────────────────────────────── */
-    .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 1rem;
-        max-width: 1400px;
-    }
-
-    /* ── Section headers ──────────────────────────────────────── */
-    .section-hdr {
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: rgba(212, 175, 55, 0.6);
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        margin: 1.5rem 0 0.6rem 0;
-        padding-bottom: 0.4rem;
-        border-bottom: 1px solid rgba(212, 175, 55, 0.1);
-    }
-
-    /* ── AI glow accent ───────────────────────────────────────── */
-    .ai-glow {
-        position: relative;
-    }
-    .ai-glow::after {
-        content: '';
-        position: absolute;
-        top: 50%; left: 50%;
-        width: 200%; height: 200%;
-        transform: translate(-50%, -50%);
-        background: radial-gradient(circle, rgba(0, 212, 255, 0.03) 0%, transparent 70%);
-        pointer-events: none;
-    }
-
-    /* ── Player chip (clickable pill) ─────────────────────────── */
-    .player-chip {
-        display: inline-block;
-        background: rgba(212, 175, 55, 0.08);
-        border: 1px solid rgba(212, 175, 55, 0.15);
-        border-radius: 20px;
-        padding: 0.25rem 0.75rem;
-        font-size: 0.82rem;
-        color: #e0e6f0;
-        margin: 0.15rem 0.1rem;
-        transition: all 0.2s ease;
-    }
-    .player-chip:hover {
-        background: rgba(212, 175, 55, 0.18);
-        border-color: rgba(212, 175, 55, 0.4);
-    }
-    .player-chip .pos {
-        color: rgba(212, 175, 55, 0.6);
-        font-size: 0.7rem;
-        margin-left: 0.3rem;
-    }
-
-    /* ── Empty state ──────────────────────────────────────────── */
-    .empty-state {
-        text-align: center;
-        color: rgba(255, 255, 255, 0.3);
-        padding: 3rem;
-        font-style: italic;
-        font-size: 0.9rem;
-    }
-
-    /* ── Back nav ─────────────────────────────────────────────── */
-    .back-btn {
-        font-size: 0.82rem;
-        color: rgba(212, 175, 55, 0.7);
-    }
-
-    /* ── Divider style ────────────────────────────────────────── */
-    hr {
-        border-color: rgba(212, 175, 55, 0.08) !important;
-    }
-
-    /* ── Scrollbar ────────────────────────────────────────────── */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb {
-        background: rgba(212, 175, 55, 0.2);
-        border-radius: 3px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-        background: rgba(212, 175, 55, 0.35);
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown(get_global_css(), unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -438,30 +207,15 @@ def _game_button(game: dict[str, Any], key_prefix: str = "") -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Sidebar — Premium navigation + Admin + Team browser
+# Sidebar — Smart Pick Pro branded nav + Joseph M Smith avatar
 # ═══════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
     # Logo / Brand
-    st.markdown(
-        """
-        <div style="text-align:center; padding: 0.5rem 0 1rem 0;">
-            <div style="font-size:2.5rem;">🏀</div>
-            <div style="
-                font-size:1.1rem; font-weight:800; letter-spacing:0.05em;
-                background: linear-gradient(135deg, #d4af37, #f0d060);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            ">SMARTPICKS PRO AI</div>
-            <div style="font-size:0.65rem; color:rgba(255,255,255,0.3);
-                        letter-spacing:0.15em; text-transform:uppercase;
-                        margin-top:0.2rem;">
-                AI Prop Betting Intelligence
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(get_sidebar_brand_html(), unsafe_allow_html=True)
+
+    # Joseph M Smith avatar
+    st.markdown(get_sidebar_avatar_html(), unsafe_allow_html=True)
     st.divider()
 
     # ── Navigation ────────────────────────────────────────────
@@ -473,6 +227,7 @@ with st.sidebar:
     nav_items = [
         ("🏠  Home", "home"),
         ("🎯  Prop Analyzer", "prop_analyzer"),
+        ("📈  Bet Tracker", "bet_tracker"),
         ("📋  Pick History", "pick_history"),
         ("🏆  Standings", "standings"),
         ("🏟️  Teams", "teams_browse"),
@@ -541,9 +296,8 @@ with st.sidebar:
 
     st.divider()
     st.markdown(
-        "<div style='text-align:center; color:rgba(255,255,255,0.2); "
-        "font-size:0.65rem;'>SmartPicksProAI v4.0<br>"
-        "AI Prop Betting Intelligence</div>",
+        '<div class="sidebar-engine-label">'
+        '⚡ Powered by Quantum Matrix Engine 5.6</div>',
         unsafe_allow_html=True,
     )
 
@@ -557,8 +311,11 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────────
 
 def _page_home() -> None:
-    st.title("🏀 SmartPicks Pro AI")
-    st.caption("Your premium NBA intelligence platform — click any game or player to explore")
+    # Hero banner
+    st.markdown(get_hero_banner_html(), unsafe_allow_html=True)
+
+    st.title("🏀 Smart Pick Pro AI")
+    st.caption("Quantum AI Prop Intelligence — click any game or player to explore")
 
     # ── Today's Games ─────────────────────────────────────────
     st.markdown('<div class="section-hdr">Today\'s Matchups</div>',
@@ -1676,6 +1433,12 @@ def _page_prop_analyzer() -> None:
         st.error("Unexpected response from the analysis engine.")
         return
 
+    # ── Auto-log to bet tracker ──────────────────────────────
+    try:
+        auto_log_analysis_bets(result, platform=platform)
+    except Exception:
+        pass  # Never block UI for tracking errors
+
     # ── Results display ─────────────────────────────────────────────
     conf = result.get("confidence", {})
     tier = conf.get("tier", "Bronze")
@@ -2132,6 +1895,168 @@ def _page_pick_history() -> None:
                     st.text(f"  Actual value: {actual}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# PAGE: BET TRACKER
+# ─────────────────────────────────────────────────────────────────────────
+
+_TRACKER_STAT_TYPES = [
+    "points", "rebounds", "assists", "threes",
+    "steals", "blocks", "turnovers",
+    "pts+reb", "pts+ast", "reb+ast", "pts+reb+ast",
+]
+
+
+def _page_bet_tracker() -> None:
+    """Full bet tracker with summary, logging, and results management."""
+    st.title("📈 Bet Tracker")
+    st.caption("Track model performance • Log bets • Record results")
+
+    # ── Summary Cards ─────────────────────────────────────────
+    stats = get_model_performance_stats()
+    summary = stats.get("summary", {})
+    st.markdown(
+        get_summary_cards_html(
+            total_bets=summary.get("total_bets", 0),
+            wins=summary.get("wins", 0),
+            losses=summary.get("losses", 0),
+            pushes=summary.get("pushes", 0),
+            pending=summary.get("pending", 0),
+            win_rate=summary.get("win_rate", 0.0),
+        ),
+        unsafe_allow_html=True,
+    )
+
+    # ── Tabs ──────────────────────────────────────────────────
+    tab_bets, tab_log, tab_perf = st.tabs([
+        "📋 My Bets", "➕ Log Bet", "📊 Performance",
+    ])
+
+    # ── Tab: My Bets ──────────────────────────────────────────
+    with tab_bets:
+        bets = load_all_bets(limit=100)
+        if not bets:
+            st.info("No bets logged yet. Use the **Log Bet** tab or run the **Prop Analyzer**.")
+        else:
+            for bet in bets:
+                bid = bet.get("bet_id", "?")
+                name = bet.get("player_name", "Unknown")
+                stat = bet.get("stat_type", "?")
+                line = bet.get("prop_line", 0)
+                direction = bet.get("direction", "?")
+                tier = bet.get("confidence_tier", "")
+                score = bet.get("confidence_score", 0)
+                edge = bet.get("edge_pct", 0)
+                result_val = bet.get("result")
+                bet_date = bet.get("bet_date", "?")
+                opp = bet.get("opponent", "?")
+                plat = bet.get("platform", "?")
+                src = bet.get("source", "manual")
+
+                dir_icon = "🟢" if direction == "OVER" else "🔴"
+                tier_emoji = {"Platinum": "💎", "Gold": "🥇", "Silver": "🥈", "Bronze": "🥉"}.get(tier, "")
+                result_emoji = {"win": "✅", "loss": "❌", "push": "➖"}.get(result_val, "⏳")
+
+                with st.expander(
+                    f"{result_emoji} {tier_emoji} **{name}** — {stat.upper()} "
+                    f"{dir_icon} {direction} {line}  •  vs {opp}  •  {bet_date}",
+                    expanded=False,
+                ):
+                    det = st.columns([1, 1, 1, 1, 1])
+                    det[0].metric("Confidence", f"{score:.0f}/100")
+                    det[1].metric("Edge", f"{edge:+.1f}%")
+                    det[2].metric("Platform", plat)
+                    det[3].metric("Tier", tier or "—")
+                    det[4].metric("Source", src.title())
+
+                    if not result_val:
+                        st.caption("Record outcome:")
+                        res = st.columns(4)
+                        if res[0].button("✅ Win", key=f"bt_win_{bid}"):
+                            record_bet_result(int(bid), "win")
+                            st.rerun()
+                        if res[1].button("❌ Loss", key=f"bt_loss_{bid}"):
+                            record_bet_result(int(bid), "loss")
+                            st.rerun()
+                        if res[2].button("➖ Push", key=f"bt_push_{bid}"):
+                            record_bet_result(int(bid), "push")
+                            st.rerun()
+                    else:
+                        actual = bet.get("actual_value")
+                        if actual is not None:
+                            st.text(f"  Actual value: {actual}")
+
+    # ── Tab: Log Bet ──────────────────────────────────────────
+    with tab_log:
+        st.subheader("➕ Log a New Bet")
+        with st.form("log_bet_form", clear_on_submit=True):
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                lb_player = st.text_input("Player Name", placeholder="e.g. LeBron James")
+                lb_stat = st.selectbox("Stat Type", _TRACKER_STAT_TYPES)
+                lb_line = st.number_input("Prop Line", min_value=0.5, step=0.5, value=20.0)
+            with fc2:
+                lb_direction = st.selectbox("Direction", ["OVER", "UNDER"])
+                lb_platform = st.selectbox("Platform", sorted(VALID_PLATFORMS))
+                lb_opponent = st.text_input("Opponent (optional)", placeholder="e.g. BOS")
+
+            lb_notes = st.text_input("Notes (optional)")
+            submitted = st.form_submit_button("📝 Log Bet", use_container_width=True)
+
+        if submitted:
+            if not lb_player or not lb_player.strip():
+                st.error("Player name is required.")
+            else:
+                res = log_new_bet(
+                    player_name=lb_player,
+                    stat_type=lb_stat,
+                    prop_line=float(lb_line),
+                    direction=lb_direction,
+                    platform=lb_platform,
+                    opponent=lb_opponent,
+                    notes=lb_notes,
+                    source="manual",
+                )
+                if res.get("success"):
+                    st.success(f"Bet logged! (ID: {res['bet_id']})")
+                else:
+                    st.error(res.get("error", "Failed to log bet."))
+
+    # ── Tab: Performance ──────────────────────────────────────
+    with tab_perf:
+        st.subheader("📊 Performance by Tier")
+        tier_data = stats.get("by_tier", [])
+        if tier_data:
+            tc = st.columns(min(len(tier_data), 4))
+            for i, t in enumerate(tier_data):
+                tier_name = t.get("tier", "?")
+                wr = t.get("win_rate", 0)
+                decided = t.get("wins", 0) + t.get("losses", 0)
+                emoji = {"Platinum": "💎", "Gold": "🥇", "Silver": "🥈", "Bronze": "🥉"}.get(tier_name, "🥉")
+                tc[i % len(tc)].metric(
+                    f"{emoji} {tier_name}",
+                    f"{wr:.0f}% WR" if decided > 0 else "N/A",
+                    delta=f"{t.get('wins', 0)}/{decided} decided" if decided > 0 else f"{t.get('total', 0)} pending",
+                )
+        else:
+            st.info("No tier data yet.")
+
+        st.divider()
+        st.subheader("📊 Performance by Stat Type")
+        stat_data = stats.get("by_stat", [])
+        if stat_data:
+            _show_df(stat_data, columns=["stat_type", "total", "wins", "losses", "pending", "win_rate"])
+        else:
+            st.info("No stat data yet.")
+
+        st.divider()
+        st.subheader("📊 Performance by Platform")
+        plat_data = stats.get("by_platform", [])
+        if plat_data:
+            _show_df(plat_data, columns=["platform", "total", "wins", "losses", "pending", "win_rate"])
+        else:
+            st.info("No platform data yet.")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Page router
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2148,6 +2073,7 @@ _PAGE_DISPATCH: dict[str, Callable[[], None]] = {
     "more": _page_more,
     "prop_analyzer": _page_prop_analyzer,
     "pick_history": _page_pick_history,
+    "bet_tracker": _page_bet_tracker,
 }
 
 _page_fn = _PAGE_DISPATCH.get(st.session_state.page)
