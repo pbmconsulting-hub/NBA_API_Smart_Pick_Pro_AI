@@ -1928,7 +1928,7 @@ def _page_pick_history() -> None:
     picks = get_pick_history(limit=100)
 
     if not picks:
-        st.info("No saved picks yet.  Use the **Prop Analyzer** to analyse and save picks.")
+        st.info("No saved picks yet.  Use the **Prop Analyzer** to analyze and save picks.")
         return
 
     # ── Summary stats ───────────────────────────────────────────────
@@ -1964,7 +1964,11 @@ def _page_pick_history() -> None:
                 tiers_seen[t]["misses"] += 1
 
         tier_cols = st.columns(min(len(tiers_seen), 5))
-        for i, (tier_name, counts) in enumerate(sorted(tiers_seen.items(), key=lambda x: -counts.get("total", 0) if (counts := x[1]) else 0)):
+        sorted_tiers = sorted(
+            tiers_seen.items(),
+            key=lambda x: -x[1].get("total", 0),
+        )
+        for i, (tier_name, counts) in enumerate(sorted_tiers):
             tier_decided = counts["hits"] + counts["misses"]
             tier_wr = (counts["hits"] / tier_decided * 100) if tier_decided > 0 else 0.0
             emoji = _TIER_EMOJI.get(tier_name, "🥉")
