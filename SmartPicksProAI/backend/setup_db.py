@@ -1209,6 +1209,54 @@ _VIEWS = {
     """,
 }
 
+# ------------------------------------------------------------------
+# Index definitions — (index_name, table, columns)
+# ------------------------------------------------------------------
+_INDEXES = (
+    ("idx_pgl_player_date", "Player_Game_Logs", "(player_id, game_id)"),
+    ("idx_pgl_game", "Player_Game_Logs", "(game_id)"),
+    ("idx_tgs_team", "Team_Game_Stats", "(team_id)"),
+    ("idx_games_date", "Games", "(game_date)"),
+    ("idx_games_season", "Games", "(season)"),
+    ("idx_players_fullname", "Players", "(full_name)"),
+    ("idx_players_team", "Players", "(team_id)"),
+    ("idx_standings_conf", "Standings", "(conference)"),
+    ("idx_schedule_date", "Schedule", "(game_date)"),
+    ("idx_schedule_home", "Schedule", "(home_team_id)"),
+    ("idx_schedule_away", "Schedule", "(away_team_id)"),
+    ("idx_pbp_game", "Play_By_Play", "(game_id)"),
+    ("idx_pbp_person", "Play_By_Play", "(person_id)"),
+    ("idx_shotchart_player", "Shot_Chart", "(player_id)"),
+    ("idx_shotchart_game", "Shot_Chart", "(game_id)"),
+    ("idx_shotchart_season", "Shot_Chart", "(season)"),
+    ("idx_tracking_game", "Player_Tracking_Stats", "(game_id)"),
+    ("idx_tracking_person", "Player_Tracking_Stats", "(person_id)"),
+    ("idx_bsa_season", "Box_Score_Advanced", "(season)"),
+    ("idx_bsa_person", "Box_Score_Advanced", "(person_id)"),
+    ("idx_bss_person", "Box_Score_Scoring", "(person_id)"),
+    ("idx_bsm_person", "Box_Score_Misc", "(person_id)"),
+    ("idx_bsh_person", "Box_Score_Hustle", "(person_id)"),
+    ("idx_bsff_person", "Box_Score_Four_Factors", "(person_id)"),
+    ("idx_bsu_person", "Box_Score_Usage", "(person_id)"),
+    ("idx_bsmatch_off", "Box_Score_Matchups", "(person_id_off)"),
+    ("idx_bsmatch_def", "Box_Score_Matchups", "(person_id_def)"),
+    ("idx_ldps_player", "League_Dash_Player_Stats", "(player_id)"),
+    ("idx_ldts_team", "League_Dash_Team_Stats", "(team_id)"),
+    ("idx_pem_player", "Player_Estimated_Metrics", "(player_id)"),
+    ("idx_tem_team", "Team_Estimated_Metrics", "(team_id)"),
+    ("idx_pcs_player", "Player_Clutch_Stats", "(player_id)"),
+    ("idx_tcs_team", "Team_Clutch_Stats", "(team_id)"),
+    ("idx_phs_player", "Player_Hustle_Stats", "(player_id)"),
+    ("idx_ths_team", "Team_Hustle_Stats", "(team_id)"),
+    ("idx_rotation_game", "Game_Rotation", "(game_id)"),
+    ("idx_rotation_person", "Game_Rotation", "(person_id)"),
+    ("idx_synergy_team", "Synergy_Play_Types", "(team_id)"),
+    ("idx_lineups_team", "League_Lineups", "(team_id)"),
+    ("idx_leaders_player", "League_Leaders", "(player_id)"),
+    ("idx_career_player", "Player_Career_Stats", "(player_id)"),
+    ("idx_winprob_game", "Win_Probability_PBP", "(game_id)"),
+)
+
 
 def create_tables(db_path: str = DB_PATH) -> None:
     """Create all SmartPicksProAI tables in *db_path*.
@@ -1224,6 +1272,7 @@ def create_tables(db_path: str = DB_PATH) -> None:
     logger.info("Connecting to database: %s", db_path)
     conn = sqlite3.connect(db_path)
     try:
+        conn.execute("PRAGMA foreign_keys = ON")
         cursor = conn.cursor()
 
         # ---- Core tables ----
@@ -1280,187 +1329,13 @@ def create_tables(db_path: str = DB_PATH) -> None:
         cursor.execute(CREATE_WIN_PROBABILITY_PBP)
 
         # ==================================================================
-        # Indexes — organised by table for easy maintenance
+        # Indexes — driven by the _INDEXES tuple for easy maintenance
         # ==================================================================
         logger.info("Creating indexes …")
-
-        # -- Core table indexes --
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pgl_player_date "
-            "ON Player_Game_Logs (player_id, game_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pgl_game "
-            "ON Player_Game_Logs (game_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tgs_team "
-            "ON Team_Game_Stats (team_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_games_date "
-            "ON Games (game_date)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_games_season "
-            "ON Games (season)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_players_fullname "
-            "ON Players (full_name)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_players_team "
-            "ON Players (team_id)"
-        )
-
-        # -- API data table indexes --
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_standings_conf "
-            "ON Standings (conference)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_schedule_date "
-            "ON Schedule (game_date)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_schedule_home "
-            "ON Schedule (home_team_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_schedule_away "
-            "ON Schedule (away_team_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pbp_game "
-            "ON Play_By_Play (game_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pbp_person "
-            "ON Play_By_Play (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_shotchart_player "
-            "ON Shot_Chart (player_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_shotchart_game "
-            "ON Shot_Chart (game_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_shotchart_season "
-            "ON Shot_Chart (season)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tracking_game "
-            "ON Player_Tracking_Stats (game_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tracking_person "
-            "ON Player_Tracking_Stats (person_id)"
-        )
-
-        # -- Box score table indexes (season + team for AI filtering) --
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bsa_season "
-            "ON Box_Score_Advanced (season)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bsa_person "
-            "ON Box_Score_Advanced (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bss_person "
-            "ON Box_Score_Scoring (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bsm_person "
-            "ON Box_Score_Misc (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bsh_person "
-            "ON Box_Score_Hustle (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bsff_person "
-            "ON Box_Score_Four_Factors (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bsu_person "
-            "ON Box_Score_Usage (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bsmatch_off "
-            "ON Box_Score_Matchups (person_id_off)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bsmatch_def "
-            "ON Box_Score_Matchups (person_id_def)"
-        )
-
-        # -- Season dashboard indexes --
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ldps_player "
-            "ON League_Dash_Player_Stats (player_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ldts_team "
-            "ON League_Dash_Team_Stats (team_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pem_player "
-            "ON Player_Estimated_Metrics (player_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tem_team "
-            "ON Team_Estimated_Metrics (team_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pcs_player "
-            "ON Player_Clutch_Stats (player_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tcs_team "
-            "ON Team_Clutch_Stats (team_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_phs_player "
-            "ON Player_Hustle_Stats (player_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ths_team "
-            "ON Team_Hustle_Stats (team_id)"
-        )
-
-        # -- Context table indexes --
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_rotation_game "
-            "ON Game_Rotation (game_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_rotation_person "
-            "ON Game_Rotation (person_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_synergy_team "
-            "ON Synergy_Play_Types (team_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_lineups_team "
-            "ON League_Lineups (team_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_leaders_player "
-            "ON League_Leaders (player_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_career_player "
-            "ON Player_Career_Stats (player_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_winprob_game "
-            "ON Win_Probability_PBP (game_id)"
-        )
+        for idx_name, table, columns in _INDEXES:
+            cursor.execute(
+                f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {columns}"
+            )
 
         # ==================================================================
         # ALTER TABLE migrations for existing databases
