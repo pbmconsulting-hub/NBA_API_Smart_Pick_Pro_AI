@@ -20,7 +20,6 @@ Usage::
 
 import logging
 import sqlite3
-import time
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -29,6 +28,7 @@ from nba_api.stats.endpoints import LeagueGameLog, ScoreboardV3
 
 import initial_pull
 import setup_db
+from utils import get_new_rows, parse_matchup_abbreviations, upsert_dataframe
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,43 +41,6 @@ SEASON = "2025-26"
 
 # NBA API date format for the date_from_nullable / date_to_nullable params.
 _NBA_DATE_FMT = "%m/%d/%Y"
-
-# Mapping from NBA API column names to Player_Game_Logs DB column names.
-STAT_COLS_MAP = {
-    "PLAYER_ID": "player_id",
-    "GAME_ID":   "game_id",
-    "WL":        "wl",
-    "MIN":       "min",
-    "PTS":       "pts",
-    "REB":       "reb",
-    "AST":       "ast",
-    "STL":       "stl",
-    "BLK":       "blk",
-    "TOV":       "tov",
-    "FGM":       "fgm",
-    "FGA":       "fga",
-    "FG_PCT":    "fg_pct",
-    "FG3M":      "fg3m",
-    "FG3A":      "fg3a",
-    "FG3_PCT":   "fg3_pct",
-    "FTM":       "ftm",
-    "FTA":       "fta",
-    "FT_PCT":    "ft_pct",
-    "OREB":      "oreb",
-    "DREB":      "dreb",
-    "PF":        "pf",
-    "PLUS_MINUS": "plus_minus",
-}
-
-# Integer stat columns (filled with 0 for DNP players).
-_INT_STAT_COLS = [
-    "pts", "reb", "ast", "stl", "blk", "tov",
-    "fgm", "fga", "fg3m", "fg3a", "ftm", "fta",
-    "oreb", "dreb", "pf",
-]
-
-# Float/percentage stat columns (filled with 0.0 for DNP players).
-_FLOAT_STAT_COLS = ["fg_pct", "fg3_pct", "ft_pct", "plus_minus"]
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +63,12 @@ def _get_last_game_date(conn: sqlite3.Connection) -> Optional[date]:
     return None
 
 
-def _fetch_logs_for_range(date_from: date, date_to: date) -> pd.DataFrame:
-    """Fetch player game logs between *date_from* and *date_to* (inclusive).
+def _fetch_logs_for_range(
+    date_from: date,
+    date_to: date,
+    player_or_team: str = "P",
+) -> pd.DataFrame:
+    """Fetch game logs between *date_from* and *date_to* (inclusive).
 
     Converts dates to the NBA API's expected ``MM/DD/YYYY`` format before
     calling the endpoint.
@@ -109,65 +76,32 @@ def _fetch_logs_for_range(date_from: date, date_to: date) -> pd.DataFrame:
     Args:
         date_from: Start date (inclusive).
         date_to:   End date (inclusive).
+        player_or_team: ``'P'`` for player logs, ``'T'`` for team logs.
 
     Returns:
         Raw DataFrame from the LeagueGameLog endpoint, or an empty DataFrame
         if the API returns no data.
     """
+    kind = "player" if player_or_team == "P" else "team"
     str_from = date_from.strftime(_NBA_DATE_FMT)
     str_to = date_to.strftime(_NBA_DATE_FMT)
     logger.info(
-        "Fetching game logs from %s to %s …", str_from, str_to
+        "Fetching %s logs from %s to %s …", kind, str_from, str_to
     )
 
     endpoint = LeagueGameLog(
-        player_or_team_abbreviation="P",
+        player_or_team_abbreviation=player_or_team,
         season=SEASON,
         season_type_all_star="Regular Season",
         date_from_nullable=str_from,
         date_to_nullable=str_to,
     )
-    time.sleep(2)  # Respect NBA API rate limits.
+    initial_pull._rate_limited_sleep()
     df = initial_pull._call_with_retries(
         lambda: endpoint.get_data_frames()[0],
-        description=f"LeagueGameLog(player, {str_from}–{str_to})",
+        description=f"LeagueGameLog({kind}, {str_from}–{str_to})",
     )
-    logger.info("API returned %d rows.", len(df))
-    return df
-
-
-def _fetch_team_logs_for_range(date_from: date, date_to: date) -> pd.DataFrame:
-    """Fetch **team-level** game logs between *date_from* and *date_to*.
-
-    Mirrors :func:`_fetch_logs_for_range` but with
-    ``player_or_team_abbreviation='T'``.
-
-    Args:
-        date_from: Start date (inclusive).
-        date_to:   End date (inclusive).
-
-    Returns:
-        Raw DataFrame of team-level game logs.
-    """
-    str_from = date_from.strftime(_NBA_DATE_FMT)
-    str_to = date_to.strftime(_NBA_DATE_FMT)
-    logger.info(
-        "Fetching team logs from %s to %s …", str_from, str_to
-    )
-
-    endpoint = LeagueGameLog(
-        player_or_team_abbreviation="T",
-        season=SEASON,
-        season_type_all_star="Regular Season",
-        date_from_nullable=str_from,
-        date_to_nullable=str_to,
-    )
-    time.sleep(2)  # Respect NBA API rate limits.
-    df = initial_pull._call_with_retries(
-        lambda: endpoint.get_data_frames()[0],
-        description=f"LeagueGameLog(team, {str_from}–{str_to})",
-    )
-    logger.info("Team-level API returned %d rows.", len(df))
+    logger.info("%s-level API returned %d rows.", kind.capitalize(), len(df))
     return df
 
 
@@ -194,36 +128,16 @@ def _parse_game_date(series: pd.Series) -> pd.Series:
 def _upsert_players(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
     """Insert or update players from *raw* in the Players table.
 
-    Uses INSERT OR REPLACE so that rows whose ``team_id`` or
-    ``team_abbreviation`` has changed (e.g. due to a trade) are updated in
-    place.
+    Delegates player DataFrame construction to
+    :func:`initial_pull.build_players_df` (shared logic) and then performs
+    ``INSERT OR REPLACE`` to handle trade updates.
 
     Args:
         raw: Raw game-log DataFrame.
         conn: Open SQLite connection.
     """
-    raw_subset = raw[["PLAYER_ID", "PLAYER_NAME", "TEAM_ID", "TEAM_ABBREVIATION"]].drop_duplicates("PLAYER_ID").copy()
-    name_parts = raw_subset["PLAYER_NAME"].str.split(" ", n=1, expand=True)
-    raw_subset["first_name"] = name_parts[0].str.strip()
-    raw_subset["last_name"] = name_parts[1].str.strip() if 1 in name_parts.columns else ""
-    raw_subset = raw_subset.rename(columns={"PLAYER_ID": "player_id", "TEAM_ID": "team_id"})
-    raw_subset["full_name"] = raw_subset["PLAYER_NAME"]
-    raw_subset["team_abbreviation"] = raw_subset["TEAM_ABBREVIATION"]
-    raw_subset["position"] = None
-    raw_subset["is_active"] = 1
-    players = raw_subset[
-        ["player_id", "first_name", "last_name", "full_name",
-         "team_id", "team_abbreviation", "position", "is_active"]
-    ]
-
-    cursor = conn.cursor()
-    cols = list(players.columns)
-    placeholders = ", ".join("?" for _ in cols)
-    col_names = ", ".join(cols)
-    sql = f"INSERT OR REPLACE INTO Players ({col_names}) VALUES ({placeholders})"
-    cursor.executemany(sql, players.itertuples(index=False, name=None))
-    if len(players):
-        logger.info("Players: upserted %d rows.", len(players))
+    players = initial_pull.build_players_df(raw)
+    upsert_dataframe(players, "Players", conn)
 
 
 def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
@@ -249,17 +163,8 @@ def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
 
     games["season"] = SEASON
 
-    def _parse_abbrevs(matchup: str):
-        if " vs. " in matchup:
-            parts = matchup.split(" vs. ", 1)
-            return parts[0].strip(), parts[1].strip()
-        if " @ " in matchup:
-            parts = matchup.split(" @ ", 1)
-            return parts[1].strip(), parts[0].strip()
-        return None, None
-
     if not games.empty:
-        home_abbrevs, away_abbrevs = zip(*games["matchup"].map(_parse_abbrevs))
+        home_abbrevs, away_abbrevs = zip(*games["matchup"].map(parse_matchup_abbreviations))
         games["home_abbrev"] = list(home_abbrevs)
         games["away_abbrev"] = list(away_abbrevs)
         # Normalise matchup to always use "{HOME} vs. {AWAY}" format.
@@ -297,12 +202,8 @@ def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
 def _upsert_logs(raw: pd.DataFrame, conn: sqlite3.Connection) -> int:
     """Insert new player-game log rows that are not already in the database.
 
-    Captures the full set of stat columns defined in :data:`STAT_COLS_MAP`.
-
-    **DNP handling:** Players who did not play (0 minutes, null/None stats)
-    have their integer stat columns set to ``0``, float/percentage columns set
-    to ``0.0``, and ``min`` set to ``'0:00'`` so downstream ML math never
-    encounters NaN values.
+    Delegates DataFrame construction to :func:`initial_pull.build_logs_df`
+    (shared DNP handling, column mapping, and deduplication).
 
     Args:
         raw: Raw game-log DataFrame.
@@ -311,31 +212,10 @@ def _upsert_logs(raw: pd.DataFrame, conn: sqlite3.Connection) -> int:
     Returns:
         Number of new rows inserted into ``Player_Game_Logs``.
     """
-    available_cols = [c for c in STAT_COLS_MAP if c in raw.columns]
-    logs = raw[available_cols].copy()
-    logs = logs.rename(columns={k: v for k, v in STAT_COLS_MAP.items() if k in available_cols})
-
-    # Deduplicate on the composite PK as a safety net — the NBA API should
-    # return exactly one row per player-game, but duplicates have been
-    # observed when raw data is merged from multiple partial fetches.
-    logs = logs.drop_duplicates(subset=["player_id", "game_id"])
-
-    # --- DNP / inactive edge-case handling ---
-    for col in _INT_STAT_COLS:
-        if col in logs.columns:
-            logs[col] = pd.to_numeric(logs[col], errors="coerce").fillna(0).astype(int)
-    for col in _FLOAT_STAT_COLS:
-        if col in logs.columns:
-            logs[col] = pd.to_numeric(logs[col], errors="coerce").fillna(0.0)
-    if "min" in logs.columns:
-        logs["min"] = logs["min"].fillna("0:00").replace("", "0:00")
+    logs = initial_pull.build_logs_df(raw)
 
     existing = pd.read_sql("SELECT player_id, game_id FROM Player_Game_Logs", conn)
-    if existing.empty:
-        new_rows = logs
-    else:
-        merged = logs.merge(existing, on=["player_id", "game_id"], how="left", indicator=True)
-        new_rows = logs[merged["_merge"] == "left_only"].copy()
+    new_rows = get_new_rows(logs, existing, on_cols=["player_id", "game_id"])
 
     if new_rows.empty:
         logger.info("Player_Game_Logs: no new rows to insert.")
@@ -392,12 +272,12 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
             sb = ScoreboardV3(game_date=today_str)
             return sb.game_header.get_data_frame(), sb.line_score.get_data_frame()
 
-        time.sleep(2)  # Respect NBA API rate limits.
+        initial_pull._rate_limited_sleep()
         game_header, line_score = initial_pull._call_with_retries(
             _fetch_scoreboard,
             description=f"ScoreboardV3({today_str})",
         )
-    except Exception:
+    except Exception:  # Broad: _call_with_retries re-raises whatever the NBA API raises.
         logger.exception(
             "Failed to fetch ScoreboardV3 for %s after %d attempts.",
             today_str, initial_pull._MAX_RETRIES,
@@ -527,7 +407,7 @@ def run_update(db_path: str = DB_PATH) -> int:
     7. Returns the total count of new ``Player_Game_Logs`` rows inserted.
 
     There are **no loops, no scheduling, and no ``while True`` blocks**.
-    A single ``time.sleep(2)`` is called inside each fetch helper after
+    A single rate-limited sleep is called inside each fetch helper before
     every API request.
 
     Args:
@@ -583,7 +463,7 @@ def run_update(db_path: str = DB_PATH) -> int:
         new_log_count = _upsert_logs(raw, conn)
 
         # Also update Team_Game_Stats from team-level logs.
-        raw_team = _fetch_team_logs_for_range(date_from, yesterday)
+        raw_team = _fetch_logs_for_range(date_from, yesterday, player_or_team="T")
         _upsert_team_game_stats(raw_team, conn)
 
         # Back-fill home/away scores from Team_Game_Stats into Games.

@@ -19,7 +19,11 @@ Run this script exactly once to establish the historical baseline:
 
 import logging
 import sqlite3
+import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 import pandas as pd
 from nba_api.stats.endpoints import (
@@ -47,6 +51,7 @@ from nba_api.stats.endpoints import (
 from nba_api.stats.static import teams as static_teams
 
 import setup_db
+from utils import get_new_rows, parse_matchup_abbreviations, upsert_dataframe
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,12 +124,37 @@ _TEAM_CONFERENCE_DIVISION: dict[str, tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 
 _MAX_RETRIES = 3
-_MAX_RETRIES_PER_PLAYER = 5          # More retries for per-player endpoints.
-_PER_PLAYER_TIMEOUT = 60             # Seconds — higher for slow per-player calls.
-_PER_GAME_TIMEOUT = 60               # Seconds — higher for per-game box-score calls.
+_MAX_RETRIES_PER_PLAYER = 3          # Retries for per-player endpoints.
+_PER_PLAYER_TIMEOUT = 30             # Seconds for per-player calls.
+_PER_GAME_TIMEOUT = 30               # Seconds for per-game box-score calls.
+_RATE_LIMIT_DELAY = 0.6              # Seconds between API calls (rate-limit).
+_PLAYER_WORKERS = 3                  # Concurrent threads for per-player fetches.
+_GAME_WORKERS = 3                    # Concurrent threads for per-game fetches.
+_BOX_SCORE_TYPE_WORKERS = 5          # Concurrent threads for box-score types within one game.
+_MAX_BACKOFF_DELAY = 30              # Cap on exponential back-off delay (seconds).
+_LOG_PROGRESS_INTERVAL = 50          # Log a progress line every N items.
+
+# Thread-safe rate limiter to avoid triggering 429 / throttling.
+_rate_lock = threading.Lock()
+_last_call_time = 0.0
 
 
-def _call_with_retries(api_callable, description="API call", max_retries=_MAX_RETRIES):
+def _rate_limited_sleep() -> None:
+    """Sleep just enough to maintain the global rate limit across threads."""
+    global _last_call_time
+    with _rate_lock:
+        now = time.monotonic()
+        elapsed = now - _last_call_time
+        if elapsed < _RATE_LIMIT_DELAY:
+            time.sleep(_RATE_LIMIT_DELAY - elapsed)
+        _last_call_time = time.monotonic()
+
+
+def _call_with_retries(
+    api_callable: Callable[[], Any],
+    description: str = "API call",
+    max_retries: int = _MAX_RETRIES,
+) -> Any:
     """Call *api_callable* up to *max_retries* times with exponential backoff.
 
     If all attempts fail, the last exception is re-raised so the caller can
@@ -149,7 +179,7 @@ def _call_with_retries(api_callable, description="API call", max_retries=_MAX_RE
         except Exception as exc:
             last_exc = exc
             if attempt < max_retries:
-                delay = min(2 ** attempt, 30)  # exponential back-off: 2, 4, 8, 16, … capped at 30 s
+                delay = min(2 ** attempt, _MAX_BACKOFF_DELAY)
                 logger.warning(
                     "%s failed (attempt %d/%d): %s — retrying in %ds …",
                     description, attempt, max_retries, exc, delay,
@@ -214,7 +244,7 @@ def fetch_team_season_logs(season: str = SEASON) -> pd.DataFrame:
         DataFrame of raw team-level game logs.
     """
     logger.info("Fetching team game logs for season %s …", season)
-    time.sleep(2)  # Respect NBA API rate limits.
+    _rate_limited_sleep()
     df = _call_with_retries(
         lambda: LeagueGameLog(
             player_or_team_abbreviation="T",
@@ -310,18 +340,8 @@ def build_games_df(raw: pd.DataFrame) -> pd.DataFrame:
 
     games["season"] = SEASON
 
-    def _parse_abbrevs(matchup: str):
-        if " vs. " in matchup:
-            parts = matchup.split(" vs. ", 1)
-            return parts[0].strip(), parts[1].strip()
-        if " @ " in matchup:
-            parts = matchup.split(" @ ", 1)
-            # left team is away, right team is home
-            return parts[1].strip(), parts[0].strip()
-        return None, None
-
     home_abbrevs, away_abbrevs = zip(
-        *games["matchup"].map(_parse_abbrevs)
+        *games["matchup"].map(parse_matchup_abbreviations)
     ) if not games.empty else ([], [])
     games["home_abbrev"] = list(home_abbrevs)
     games["away_abbrev"] = list(away_abbrevs)
@@ -511,16 +531,7 @@ def load_players(players: pd.DataFrame, conn: sqlite3.Connection) -> None:
         players: DataFrame produced by :func:`build_players_df`.
         conn: Open SQLite connection.
     """
-    if players.empty:
-        logger.info("Players table: no rows to upsert.")
-        return
-    cursor = conn.cursor()
-    cols = list(players.columns)
-    placeholders = ", ".join("?" for _ in cols)
-    col_names = ", ".join(cols)
-    sql = f"INSERT OR REPLACE INTO Players ({col_names}) VALUES ({placeholders})"
-    cursor.executemany(sql, players.itertuples(index=False, name=None))
-    logger.info("Players table: upserted %d rows.", len(players))
+    upsert_dataframe(players, "Players", conn)
 
 
 def seed_teams_from_api(conn: sqlite3.Connection) -> None:
@@ -583,13 +594,7 @@ def load_logs(logs: pd.DataFrame, conn: sqlite3.Connection) -> None:
     existing = pd.read_sql(
         "SELECT player_id, game_id FROM Player_Game_Logs", conn
     )
-    if existing.empty:
-        new_rows = logs
-    else:
-        merged = logs.merge(
-            existing, on=["player_id", "game_id"], how="left", indicator=True
-        )
-        new_rows = logs[merged["_merge"] == "left_only"].copy()
+    new_rows = get_new_rows(logs, existing, on_cols=["player_id", "game_id"])
 
     if new_rows.empty:
         logger.info("Player_Game_Logs table: no new rows to insert.")
@@ -613,13 +618,7 @@ def load_team_game_stats(
     existing = pd.read_sql(
         "SELECT game_id, team_id FROM Team_Game_Stats", conn
     )
-    if existing.empty:
-        new_rows = stats
-    else:
-        merged = stats.merge(
-            existing, on=["game_id", "team_id"], how="left", indicator=True
-        )
-        new_rows = stats[merged["_merge"] == "left_only"].copy()
+    new_rows = get_new_rows(stats, existing, on_cols=["game_id", "team_id"])
 
     if new_rows.empty:
         logger.info("Team_Game_Stats table: no new rows to insert.")
@@ -757,44 +756,50 @@ def fetch_and_load_rosters(
     all_roster_rows: list[dict] = []
     position_updates: list[tuple] = []
 
-    for tid in team_ids:
+    def _fetch_roster(tid: int) -> tuple[int, pd.DataFrame | None]:
+        """Fetch a single team's roster with rate limiting."""
         try:
-            time.sleep(2)  # Respect NBA API rate limits.
+            _rate_limited_sleep()
             df = _call_with_retries(
                 lambda tid=tid: CommonTeamRoster(
                     team_id=tid, season=season,
                 ).get_data_frames()[0],
                 description=f"CommonTeamRoster(team={tid})",
             )
+            return tid, df
         except Exception:
             logger.warning(
                 "Failed to fetch roster for team %d after %d attempts — skipping.",
                 tid, _MAX_RETRIES,
             )
-            continue
+            return tid, None
 
-        if df.empty:
-            continue
-
-        for _, row in df.iterrows():
-            pid = row.get("PLAYER_ID")
-            raw_pos = row.get("POSITION", None)
-            height_str = row.get("HEIGHT", None)
-            if pid is None:
+    with ThreadPoolExecutor(max_workers=_PLAYER_WORKERS) as executor:
+        futures = {executor.submit(_fetch_roster, tid): tid for tid in team_ids}
+        for future in as_completed(futures):
+            tid, df = future.result()
+            if df is None or df.empty:
                 continue
-            all_roster_rows.append({
-                "team_id": tid,
-                "player_id": int(pid),
-                "effective_start_date": season,
-                "effective_end_date": None,
-                "is_two_way": 0,
-                "is_g_league": 0,
-            })
-            if raw_pos:
-                h_in = _parse_height_inches(height_str)
-                mapped = _map_to_five_position(raw_pos, h_in)
-                if mapped:
-                    position_updates.append((mapped, int(pid)))
+
+            for _, row in df.iterrows():
+                pid = row.get("PLAYER_ID")
+                raw_pos = row.get("POSITION", None)
+                height_str = row.get("HEIGHT", None)
+                if pid is None:
+                    continue
+                all_roster_rows.append({
+                    "team_id": tid,
+                    "player_id": int(pid),
+                    "effective_start_date": season,
+                    "effective_end_date": None,
+                    "is_two_way": 0,
+                    "is_g_league": 0,
+                })
+                if raw_pos:
+                    h_in = _parse_height_inches(height_str)
+                    mapped = _map_to_five_position(raw_pos, h_in)
+                    if mapped:
+                        position_updates.append((mapped, int(pid)))
 
     # Load Team_Roster rows.
     if all_roster_rows:
@@ -996,503 +1001,359 @@ def populate_defense_vs_position(
 # ---------------------------------------------------------------------------
 
 
-def populate_player_clutch_stats(
-    conn: sqlite3.Connection, season: str = SEASON
+def _populate_season_table(
+    conn: sqlite3.Connection,
+    endpoint_factory: Callable[[], Any],
+    col_map: dict[str, str],
+    table_name: str,
+    season: str = SEASON,
+    *,
+    description: str = "",
+    season_col: str = "season",
+    delete_filter: str | None = None,
+    include_season: bool = True,
 ) -> None:
-    """Fetch and load season-level clutch stats for all players.
+    """Generic helper: fetch one season-level NBA endpoint and load into SQLite.
 
-    Uses :class:`LeagueDashPlayerClutch` to retrieve clutch-time performance
-    (last 5 minutes, score within 5 points) for every player in one API call.
+    Handles rate limiting, retries, column renaming, delete-before-insert,
+    and logging — the identical boilerplate shared by every ``populate_*``
+    dashboard function.
 
     Args:
         conn: Open SQLite connection.
-        season: NBA season string, e.g. ``'2025-26'``.
+        endpoint_factory: Zero-arg callable returning an nba_api endpoint
+            instance (already parameterised with *season*).
+        col_map: Mapping from NBA API column names to DB column names.
+        table_name: Target SQLite table name.
+        season: NBA season string.
+        description: Human-readable label for log messages.
+        season_col: Column name for the season value in the result.
+        delete_filter: SQL WHERE clause for the DELETE.  ``None`` (default)
+            means ``WHERE {season_col} = ?``.  An empty string means
+            ``DELETE FROM {table_name}`` with no filter.
+        include_season: Whether to add a season column to the result.
     """
-    logger.info("Fetching player clutch stats for season %s …", season)
+    desc = description or table_name
+    logger.info("Fetching %s for season %s …", desc, season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
-            lambda: LeagueDashPlayerClutch(
-                season=season, season_type_all_star="Regular Season",
-            ).get_data_frames()[0],
-            description="LeagueDashPlayerClutch",
+            lambda: endpoint_factory().get_data_frames()[0],
+            description=desc,
         )
     except Exception:
-        logger.exception("Failed to fetch player clutch stats after %d attempts — skipping.", _MAX_RETRIES)
+        logger.exception(
+            "Failed to fetch %s after %d attempts — skipping.",
+            desc, _MAX_RETRIES,
+        )
         return
 
     if df.empty:
-        logger.info("Player_Clutch_Stats: no data returned.")
+        logger.info("%s: no data returned.", table_name)
         return
 
-    col_map = {
-        "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
-        "TEAM_ABBREVIATION": "team_abbreviation", "AGE": "age",
-        "GP": "gp", "W": "w", "L": "l", "W_PCT": "w_pct",
-        "MIN": "min", "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
-        "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
-        "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
-        "OREB": "oreb", "DREB": "dreb", "REB": "reb",
-        "AST": "ast", "TOV": "tov", "STL": "stl", "BLK": "blk",
-        "BLKA": "blka", "PF": "pf", "PFD": "pfd",
-        "PTS": "pts", "PLUS_MINUS": "plus_minus",
-        "NBA_FANTASY_PTS": "nba_fantasy_pts", "DD2": "dd2", "TD3": "td3",
-    }
     available = {k: v for k, v in col_map.items() if k in df.columns}
     result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
 
-    conn.execute("DELETE FROM Player_Clutch_Stats WHERE season = ?", (season,))
-    result.to_sql("Player_Clutch_Stats", conn, if_exists="append", index=False)
-    logger.info("Player_Clutch_Stats: inserted %d rows.", len(result))
+    if include_season:
+        result[season_col] = season
+
+    if delete_filter is None:
+        conn.execute(
+            f"DELETE FROM {table_name} WHERE {season_col} = ?", (season,)
+        )
+    elif delete_filter == "":
+        conn.execute(f"DELETE FROM {table_name}")
+    else:
+        conn.execute(f"DELETE FROM {table_name} {delete_filter}", (season,))
+
+    result.to_sql(table_name, conn, if_exists="append", index=False)
+    logger.info("%s: inserted %d rows.", table_name, len(result))
+
+
+def populate_player_clutch_stats(
+    conn: sqlite3.Connection, season: str = SEASON
+) -> None:
+    """Fetch and load season-level clutch stats for all players."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: LeagueDashPlayerClutch(
+            season=season, season_type_all_star="Regular Season",
+        ),
+        col_map={
+            "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
+            "TEAM_ABBREVIATION": "team_abbreviation", "AGE": "age",
+            "GP": "gp", "W": "w", "L": "l", "W_PCT": "w_pct",
+            "MIN": "min", "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
+            "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
+            "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
+            "OREB": "oreb", "DREB": "dreb", "REB": "reb",
+            "AST": "ast", "TOV": "tov", "STL": "stl", "BLK": "blk",
+            "BLKA": "blka", "PF": "pf", "PFD": "pfd",
+            "PTS": "pts", "PLUS_MINUS": "plus_minus",
+            "NBA_FANTASY_PTS": "nba_fantasy_pts", "DD2": "dd2", "TD3": "td3",
+        },
+        table_name="Player_Clutch_Stats",
+        season=season,
+        description="LeagueDashPlayerClutch",
+    )
 
 
 def populate_team_clutch_stats(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load season-level clutch stats for all teams.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching team clutch stats for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: LeagueDashTeamClutch(
-                season=season, season_type_all_star="Regular Season",
-            ).get_data_frames()[0],
-            description="LeagueDashTeamClutch",
-        )
-    except Exception:
-        logger.exception("Failed to fetch team clutch stats after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("Team_Clutch_Stats: no data returned.")
-        return
-
-    col_map = {
-        "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
-        "W_PCT": "w_pct", "MIN": "min",
-        "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
-        "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
-        "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
-        "OREB": "oreb", "DREB": "dreb", "REB": "reb",
-        "AST": "ast", "TOV": "tov", "STL": "stl", "BLK": "blk",
-        "BLKA": "blka", "PF": "pf", "PFD": "pfd",
-        "PTS": "pts", "PLUS_MINUS": "plus_minus",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
-
-    conn.execute("DELETE FROM Team_Clutch_Stats WHERE season = ?", (season,))
-    result.to_sql("Team_Clutch_Stats", conn, if_exists="append", index=False)
-    logger.info("Team_Clutch_Stats: inserted %d rows.", len(result))
+    """Fetch and load season-level clutch stats for all teams."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: LeagueDashTeamClutch(
+            season=season, season_type_all_star="Regular Season",
+        ),
+        col_map={
+            "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
+            "W_PCT": "w_pct", "MIN": "min",
+            "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
+            "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
+            "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
+            "OREB": "oreb", "DREB": "dreb", "REB": "reb",
+            "AST": "ast", "TOV": "tov", "STL": "stl", "BLK": "blk",
+            "BLKA": "blka", "PF": "pf", "PFD": "pfd",
+            "PTS": "pts", "PLUS_MINUS": "plus_minus",
+        },
+        table_name="Team_Clutch_Stats",
+        season=season,
+        description="LeagueDashTeamClutch",
+    )
 
 
 def populate_player_hustle_stats(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load season-level hustle stats for all players.
-
-    Uses :class:`LeagueHustleStatsPlayer` — one API call returns all players.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching player hustle stats for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: LeagueHustleStatsPlayer(
-                season=season, season_type_all_star="Regular Season",
-            ).get_data_frames()[0],
-            description="LeagueHustleStatsPlayer",
-        )
-    except Exception:
-        logger.exception("Failed to fetch player hustle stats after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("Player_Hustle_Stats: no data returned.")
-        return
-
-    col_map = {
-        "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
-        "TEAM_ABBREVIATION": "team_abbreviation", "AGE": "age",
-        "GP": "gp", "MIN": "min",
-        "CONTESTED_SHOTS": "contested_shots",
-        "CONTESTED_SHOTS_2PT": "contested_shots_2pt",
-        "CONTESTED_SHOTS_3PT": "contested_shots_3pt",
-        "DEFLECTIONS": "deflections", "CHARGES_DRAWN": "charges_drawn",
-        "SCREEN_ASSISTS": "screen_assists",
-        "SCREEN_AST_PTS": "screen_ast_pts",
-        "OFF_LOOSE_BALLS_RECOVERED": "off_loose_balls",
-        "DEF_LOOSE_BALLS_RECOVERED": "def_loose_balls",
-        "LOOSE_BALLS_RECOVERED": "loose_balls",
-        "PCT_LOOSE_BALLS_RECOVERED_OFF": "pct_loose_balls_off",
-        "PCT_LOOSE_BALLS_RECOVERED_DEF": "pct_loose_balls_def",
-        "OFF_BOXOUTS": "off_boxouts", "DEF_BOXOUTS": "def_boxouts",
-        "BOX_OUT_PLAYER_TEAM_REBS": "boxout_team_rebs",
-        "BOX_OUT_PLAYER_REBS": "boxout_player_rebs",
-        "BOX_OUTS": "boxouts",
-        "PCT_BOX_OUTS_OFF": "pct_boxouts_off",
-        "PCT_BOX_OUTS_DEF": "pct_boxouts_def",
-        "PCT_BOX_OUTS_TEAM_REB": "pct_boxouts_team_reb",
-        "PCT_BOX_OUTS_REB": "pct_boxouts_reb",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
-
-    conn.execute("DELETE FROM Player_Hustle_Stats WHERE season = ?", (season,))
-    result.to_sql("Player_Hustle_Stats", conn, if_exists="append", index=False)
-    logger.info("Player_Hustle_Stats: inserted %d rows.", len(result))
+    """Fetch and load season-level hustle stats for all players."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: LeagueHustleStatsPlayer(
+            season=season, season_type_all_star="Regular Season",
+        ),
+        col_map={
+            "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
+            "TEAM_ABBREVIATION": "team_abbreviation", "AGE": "age",
+            "GP": "gp", "MIN": "min",
+            "CONTESTED_SHOTS": "contested_shots",
+            "CONTESTED_SHOTS_2PT": "contested_shots_2pt",
+            "CONTESTED_SHOTS_3PT": "contested_shots_3pt",
+            "DEFLECTIONS": "deflections", "CHARGES_DRAWN": "charges_drawn",
+            "SCREEN_ASSISTS": "screen_assists",
+            "SCREEN_AST_PTS": "screen_ast_pts",
+            "OFF_LOOSE_BALLS_RECOVERED": "off_loose_balls",
+            "DEF_LOOSE_BALLS_RECOVERED": "def_loose_balls",
+            "LOOSE_BALLS_RECOVERED": "loose_balls",
+            "PCT_LOOSE_BALLS_RECOVERED_OFF": "pct_loose_balls_off",
+            "PCT_LOOSE_BALLS_RECOVERED_DEF": "pct_loose_balls_def",
+            "OFF_BOXOUTS": "off_boxouts", "DEF_BOXOUTS": "def_boxouts",
+            "BOX_OUT_PLAYER_TEAM_REBS": "boxout_team_rebs",
+            "BOX_OUT_PLAYER_REBS": "boxout_player_rebs",
+            "BOX_OUTS": "boxouts",
+            "PCT_BOX_OUTS_OFF": "pct_boxouts_off",
+            "PCT_BOX_OUTS_DEF": "pct_boxouts_def",
+            "PCT_BOX_OUTS_TEAM_REB": "pct_boxouts_team_reb",
+            "PCT_BOX_OUTS_REB": "pct_boxouts_reb",
+        },
+        table_name="Player_Hustle_Stats",
+        season=season,
+        description="LeagueHustleStatsPlayer",
+    )
 
 
 def populate_team_hustle_stats(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load season-level hustle stats for all teams.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching team hustle stats for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: LeagueHustleStatsTeam(
-                season=season, season_type_all_star="Regular Season",
-            ).get_data_frames()[0],
-            description="LeagueHustleStatsTeam",
-        )
-    except Exception:
-        logger.exception("Failed to fetch team hustle stats after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("Team_Hustle_Stats: no data returned.")
-        return
-
-    col_map = {
-        "TEAM_ID": "team_id", "MIN": "min",
-        "CONTESTED_SHOTS": "contested_shots",
-        "CONTESTED_SHOTS_2PT": "contested_shots_2pt",
-        "CONTESTED_SHOTS_3PT": "contested_shots_3pt",
-        "DEFLECTIONS": "deflections", "CHARGES_DRAWN": "charges_drawn",
-        "SCREEN_ASSISTS": "screen_assists",
-        "SCREEN_AST_PTS": "screen_ast_pts",
-        "OFF_LOOSE_BALLS_RECOVERED": "off_loose_balls",
-        "DEF_LOOSE_BALLS_RECOVERED": "def_loose_balls",
-        "LOOSE_BALLS_RECOVERED": "loose_balls",
-        "PCT_LOOSE_BALLS_RECOVERED_OFF": "pct_loose_balls_off",
-        "PCT_LOOSE_BALLS_RECOVERED_DEF": "pct_loose_balls_def",
-        "OFF_BOXOUTS": "off_boxouts", "DEF_BOXOUTS": "def_boxouts",
-        "BOX_OUTS": "boxouts",
-        "PCT_BOX_OUTS_OFF": "pct_boxouts_off",
-        "PCT_BOX_OUTS_DEF": "pct_boxouts_def",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
-
-    conn.execute("DELETE FROM Team_Hustle_Stats WHERE season = ?", (season,))
-    result.to_sql("Team_Hustle_Stats", conn, if_exists="append", index=False)
-    logger.info("Team_Hustle_Stats: inserted %d rows.", len(result))
+    """Fetch and load season-level hustle stats for all teams."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: LeagueHustleStatsTeam(
+            season=season, season_type_all_star="Regular Season",
+        ),
+        col_map={
+            "TEAM_ID": "team_id", "MIN": "min",
+            "CONTESTED_SHOTS": "contested_shots",
+            "CONTESTED_SHOTS_2PT": "contested_shots_2pt",
+            "CONTESTED_SHOTS_3PT": "contested_shots_3pt",
+            "DEFLECTIONS": "deflections", "CHARGES_DRAWN": "charges_drawn",
+            "SCREEN_ASSISTS": "screen_assists",
+            "SCREEN_AST_PTS": "screen_ast_pts",
+            "OFF_LOOSE_BALLS_RECOVERED": "off_loose_balls",
+            "DEF_LOOSE_BALLS_RECOVERED": "def_loose_balls",
+            "LOOSE_BALLS_RECOVERED": "loose_balls",
+            "PCT_LOOSE_BALLS_RECOVERED_OFF": "pct_loose_balls_off",
+            "PCT_LOOSE_BALLS_RECOVERED_DEF": "pct_loose_balls_def",
+            "OFF_BOXOUTS": "off_boxouts", "DEF_BOXOUTS": "def_boxouts",
+            "BOX_OUTS": "boxouts",
+            "PCT_BOX_OUTS_OFF": "pct_boxouts_off",
+            "PCT_BOX_OUTS_DEF": "pct_boxouts_def",
+        },
+        table_name="Team_Hustle_Stats",
+        season=season,
+        description="LeagueHustleStatsTeam",
+    )
 
 
 def populate_player_bio(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load player bio information for all players.
-
-    Uses :class:`LeagueDashPlayerBioStats` — one API call returns all players.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching player bio stats for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: LeagueDashPlayerBioStats(
-                season=season, season_type_all_star="Regular Season",
-            ).get_data_frames()[0],
-            description="LeagueDashPlayerBioStats",
-        )
-    except Exception:
-        logger.exception("Failed to fetch player bio stats after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("Player_Bio: no data returned.")
-        return
-
-    col_map = {
-        "PLAYER_ID": "player_id", "PLAYER_NAME": "player_name",
-        "TEAM_ID": "team_id", "TEAM_ABBREVIATION": "team_abbreviation",
-        "AGE": "age", "PLAYER_HEIGHT": "player_height",
-        "PLAYER_HEIGHT_INCHES": "player_height_inches",
-        "PLAYER_WEIGHT": "player_weight",
-        "COLLEGE": "college", "COUNTRY": "country",
-        "DRAFT_YEAR": "draft_year", "DRAFT_ROUND": "draft_round",
-        "DRAFT_NUMBER": "draft_number",
-        "GP": "gp", "PTS": "pts", "REB": "reb", "AST": "ast",
-        "NET_RATING": "net_rating", "OREB_PCT": "oreb_pct",
-        "DREB_PCT": "dreb_pct", "USG_PCT": "usg_pct",
-        "TS_PCT": "ts_pct", "AST_PCT": "ast_pct",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-
-    conn.execute("DELETE FROM Player_Bio")
-    result.to_sql("Player_Bio", conn, if_exists="append", index=False)
-    logger.info("Player_Bio: inserted %d rows.", len(result))
+    """Fetch and load player bio information for all players."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: LeagueDashPlayerBioStats(
+            season=season, season_type_all_star="Regular Season",
+        ),
+        col_map={
+            "PLAYER_ID": "player_id", "PLAYER_NAME": "player_name",
+            "TEAM_ID": "team_id", "TEAM_ABBREVIATION": "team_abbreviation",
+            "AGE": "age", "PLAYER_HEIGHT": "player_height",
+            "PLAYER_HEIGHT_INCHES": "player_height_inches",
+            "PLAYER_WEIGHT": "player_weight",
+            "COLLEGE": "college", "COUNTRY": "country",
+            "DRAFT_YEAR": "draft_year", "DRAFT_ROUND": "draft_round",
+            "DRAFT_NUMBER": "draft_number",
+            "GP": "gp", "PTS": "pts", "REB": "reb", "AST": "ast",
+            "NET_RATING": "net_rating", "OREB_PCT": "oreb_pct",
+            "DREB_PCT": "dreb_pct", "USG_PCT": "usg_pct",
+            "TS_PCT": "ts_pct", "AST_PCT": "ast_pct",
+        },
+        table_name="Player_Bio",
+        season=season,
+        description="LeagueDashPlayerBioStats",
+        include_season=False,
+        delete_filter="",
+    )
 
 
 def populate_player_estimated_metrics(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load player estimated advanced metrics.
-
-    Uses :class:`PlayerEstimatedMetrics` — one API call returns all players.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching player estimated metrics for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: PlayerEstimatedMetrics(
-                season=season, season_type="Regular Season",
-            ).get_data_frames()[0],
-            description="PlayerEstimatedMetrics",
-        )
-    except Exception:
-        logger.exception("Failed to fetch player estimated metrics after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("Player_Estimated_Metrics: no data returned.")
-        return
-
-    col_map = {
-        "PLAYER_ID": "player_id", "GP": "gp", "W": "w", "L": "l",
-        "W_PCT": "w_pct", "MIN": "min",
-        "E_OFF_RATING": "e_off_rating", "E_DEF_RATING": "e_def_rating",
-        "E_NET_RATING": "e_net_rating", "E_AST_RATIO": "e_ast_ratio",
-        "E_OREB_PCT": "e_oreb_pct", "E_DREB_PCT": "e_dreb_pct",
-        "E_REB_PCT": "e_reb_pct", "E_TOV_PCT": "e_tov_pct",
-        "E_USG_PCT": "e_usg_pct", "E_PACE": "e_pace",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
-
-    conn.execute("DELETE FROM Player_Estimated_Metrics WHERE season = ?", (season,))
-    result.to_sql("Player_Estimated_Metrics", conn, if_exists="append", index=False)
-    logger.info("Player_Estimated_Metrics: inserted %d rows.", len(result))
+    """Fetch and load player estimated advanced metrics."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: PlayerEstimatedMetrics(
+            season=season, season_type="Regular Season",
+        ),
+        col_map={
+            "PLAYER_ID": "player_id", "GP": "gp", "W": "w", "L": "l",
+            "W_PCT": "w_pct", "MIN": "min",
+            "E_OFF_RATING": "e_off_rating", "E_DEF_RATING": "e_def_rating",
+            "E_NET_RATING": "e_net_rating", "E_AST_RATIO": "e_ast_ratio",
+            "E_OREB_PCT": "e_oreb_pct", "E_DREB_PCT": "e_dreb_pct",
+            "E_REB_PCT": "e_reb_pct", "E_TOV_PCT": "e_tov_pct",
+            "E_USG_PCT": "e_usg_pct", "E_PACE": "e_pace",
+        },
+        table_name="Player_Estimated_Metrics",
+        season=season,
+        description="PlayerEstimatedMetrics",
+    )
 
 
 def populate_team_estimated_metrics(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load team estimated advanced metrics.
-
-    Uses :class:`TeamEstimatedMetrics` — one API call returns all teams.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching team estimated metrics for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: TeamEstimatedMetrics(
-                season=season, season_type="Regular Season",
-            ).get_data_frames()[0],
-            description="TeamEstimatedMetrics",
-        )
-    except Exception:
-        logger.exception("Failed to fetch team estimated metrics after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("Team_Estimated_Metrics: no data returned.")
-        return
-
-    col_map = {
-        "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
-        "W_PCT": "w_pct", "MIN": "min",
-        "E_OFF_RATING": "e_off_rating", "E_DEF_RATING": "e_def_rating",
-        "E_NET_RATING": "e_net_rating", "E_PACE": "e_pace",
-        "E_AST_RATIO": "e_ast_ratio", "E_OREB_PCT": "e_oreb_pct",
-        "E_DREB_PCT": "e_dreb_pct", "E_REB_PCT": "e_reb_pct",
-        "E_TM_TOV_PCT": "e_tm_tov_pct",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
-
-    conn.execute("DELETE FROM Team_Estimated_Metrics WHERE season = ?", (season,))
-    result.to_sql("Team_Estimated_Metrics", conn, if_exists="append", index=False)
-    logger.info("Team_Estimated_Metrics: inserted %d rows.", len(result))
+    """Fetch and load team estimated advanced metrics."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: TeamEstimatedMetrics(
+            season=season, season_type="Regular Season",
+        ),
+        col_map={
+            "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
+            "W_PCT": "w_pct", "MIN": "min",
+            "E_OFF_RATING": "e_off_rating", "E_DEF_RATING": "e_def_rating",
+            "E_NET_RATING": "e_net_rating", "E_PACE": "e_pace",
+            "E_AST_RATIO": "e_ast_ratio", "E_OREB_PCT": "e_oreb_pct",
+            "E_DREB_PCT": "e_dreb_pct", "E_REB_PCT": "e_reb_pct",
+            "E_TM_TOV_PCT": "e_tm_tov_pct",
+        },
+        table_name="Team_Estimated_Metrics",
+        season=season,
+        description="TeamEstimatedMetrics",
+    )
 
 
 def populate_league_dash_player_stats(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load league dashboard player stats.
-
-    Uses :class:`LeagueDashPlayerStats` — one API call returns all players.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching league dash player stats for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: LeagueDashPlayerStats(
-                season=season, season_type_all_star="Regular Season",
-            ).get_data_frames()[0],
-            description="LeagueDashPlayerStats",
-        )
-    except Exception:
-        logger.exception("Failed to fetch league dash player stats after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("League_Dash_Player_Stats: no data returned.")
-        return
-
-    col_map = {
-        "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
-        "TEAM_ABBREVIATION": "team_abbreviation", "AGE": "age",
-        "GP": "gp", "W": "w", "L": "l", "W_PCT": "w_pct",
-        "MIN": "min", "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
-        "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
-        "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
-        "OREB": "oreb", "DREB": "dreb", "REB": "reb",
-        "AST": "ast", "TOV": "tov", "STL": "stl", "BLK": "blk",
-        "BLKA": "blka", "PF": "pf", "PFD": "pfd",
-        "PTS": "pts", "PLUS_MINUS": "plus_minus",
-        "NBA_FANTASY_PTS": "nba_fantasy_pts", "DD2": "dd2", "TD3": "td3",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
-
-    conn.execute("DELETE FROM League_Dash_Player_Stats WHERE season = ?", (season,))
-    result.to_sql("League_Dash_Player_Stats", conn, if_exists="append", index=False)
-    logger.info("League_Dash_Player_Stats: inserted %d rows.", len(result))
+    """Fetch and load league dashboard player stats."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: LeagueDashPlayerStats(
+            season=season, season_type_all_star="Regular Season",
+        ),
+        col_map={
+            "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
+            "TEAM_ABBREVIATION": "team_abbreviation", "AGE": "age",
+            "GP": "gp", "W": "w", "L": "l", "W_PCT": "w_pct",
+            "MIN": "min", "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
+            "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
+            "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
+            "OREB": "oreb", "DREB": "dreb", "REB": "reb",
+            "AST": "ast", "TOV": "tov", "STL": "stl", "BLK": "blk",
+            "BLKA": "blka", "PF": "pf", "PFD": "pfd",
+            "PTS": "pts", "PLUS_MINUS": "plus_minus",
+            "NBA_FANTASY_PTS": "nba_fantasy_pts", "DD2": "dd2", "TD3": "td3",
+        },
+        table_name="League_Dash_Player_Stats",
+        season=season,
+        description="LeagueDashPlayerStats",
+    )
 
 
 def populate_league_dash_team_stats(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load league dashboard team stats.
-
-    Uses :class:`LeagueDashTeamStats` — one API call returns all teams.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching league dash team stats for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: LeagueDashTeamStats(
-                season=season, season_type_all_star="Regular Season",
-            ).get_data_frames()[0],
-            description="LeagueDashTeamStats",
-        )
-    except Exception:
-        logger.exception("Failed to fetch league dash team stats after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("League_Dash_Team_Stats: no data returned.")
-        return
-
-    col_map = {
-        "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
-        "W_PCT": "w_pct", "MIN": "min",
-        "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
-        "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
-        "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
-        "OREB": "oreb", "DREB": "dreb", "REB": "reb",
-        "AST": "ast", "TOV": "tov", "STL": "stl", "BLK": "blk",
-        "BLKA": "blka", "PF": "pf", "PFD": "pfd",
-        "PTS": "pts", "PLUS_MINUS": "plus_minus",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
-
-    conn.execute("DELETE FROM League_Dash_Team_Stats WHERE season = ?", (season,))
-    result.to_sql("League_Dash_Team_Stats", conn, if_exists="append", index=False)
-    logger.info("League_Dash_Team_Stats: inserted %d rows.", len(result))
+    """Fetch and load league dashboard team stats."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: LeagueDashTeamStats(
+            season=season, season_type_all_star="Regular Season",
+        ),
+        col_map={
+            "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
+            "W_PCT": "w_pct", "MIN": "min",
+            "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
+            "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
+            "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
+            "OREB": "oreb", "DREB": "dreb", "REB": "reb",
+            "AST": "ast", "TOV": "tov", "STL": "stl", "BLK": "blk",
+            "BLKA": "blka", "PF": "pf", "PFD": "pfd",
+            "PTS": "pts", "PLUS_MINUS": "plus_minus",
+        },
+        table_name="League_Dash_Team_Stats",
+        season=season,
+        description="LeagueDashTeamStats",
+    )
 
 
 def populate_league_leaders(
     conn: sqlite3.Connection, season: str = SEASON
 ) -> None:
-    """Fetch and load league leaders.
-
-    Uses :class:`LeagueLeaders` — one API call returns top players.
-
-    Args:
-        conn: Open SQLite connection.
-        season: NBA season string.
-    """
-    logger.info("Fetching league leaders for season %s …", season)
-    try:
-        time.sleep(2)
-        df = _call_with_retries(
-            lambda: LeagueLeaders(
-                season=season, season_type_all_star="Regular Season",
-            ).get_data_frames()[0],
-            description="LeagueLeaders",
-        )
-    except Exception:
-        logger.exception("Failed to fetch league leaders after %d attempts — skipping.", _MAX_RETRIES)
-        return
-
-    if df.empty:
-        logger.info("League_Leaders: no data returned.")
-        return
-
-    col_map = {
-        "PLAYER_ID": "player_id", "RANK": "rank", "TEAM": "team",
-        "GP": "gp", "MIN": "min",
-        "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
-        "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
-        "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
-        "OREB": "oreb", "DREB": "dreb", "REB": "reb",
-        "AST": "ast", "STL": "stl", "BLK": "blk", "TOV": "tov",
-        "PF": "pf", "PTS": "pts", "EFF": "eff",
-        "AST_TOV": "ast_tov", "STL_TOV": "stl_tov",
-    }
-    available = {k: v for k, v in col_map.items() if k in df.columns}
-    result = df[list(available.keys())].rename(columns=available)
-    result["season"] = season
-
-    conn.execute("DELETE FROM League_Leaders WHERE season = ?", (season,))
-    result.to_sql("League_Leaders", conn, if_exists="append", index=False)
-    logger.info("League_Leaders: inserted %d rows.", len(result))
+    """Fetch and load league leaders."""
+    _populate_season_table(
+        conn,
+        endpoint_factory=lambda: LeagueLeaders(
+            season=season, season_type_all_star="Regular Season",
+        ),
+        col_map={
+            "PLAYER_ID": "player_id", "RANK": "rank", "TEAM": "team",
+            "GP": "gp", "MIN": "min",
+            "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
+            "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
+            "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
+            "OREB": "oreb", "DREB": "dreb", "REB": "reb",
+            "AST": "ast", "STL": "stl", "BLK": "blk", "TOV": "tov",
+            "PF": "pf", "PTS": "pts", "EFF": "eff",
+            "AST_TOV": "ast_tov", "STL_TOV": "stl_tov",
+        },
+        table_name="League_Leaders",
+        season=season,
+        description="LeagueLeaders",
+    )
 
 
 def populate_standings(
@@ -1508,7 +1369,7 @@ def populate_standings(
     """
     logger.info("Fetching standings for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueStandingsV3(
                 season=season, season_type="Regular Season",
@@ -1592,9 +1453,8 @@ def populate_player_career_stats(
 ) -> None:
     """Fetch and load career stats for all active players.
 
-    Iterates over every player in the Players table and calls
-    :class:`PlayerCareerStats` for each.  Rate-limited with a 2-second
-    sleep between requests.
+    Uses a thread pool to fetch multiple players concurrently while
+    respecting the NBA API rate limit via :func:`_rate_limited_sleep`.
 
     Args:
         conn: Open SQLite connection.
@@ -1610,13 +1470,25 @@ def populate_player_career_stats(
         return
 
     logger.info("Fetching career stats for %d players …", len(player_ids))
-    all_rows: list[pd.DataFrame] = []
 
-    for i, pid in enumerate(player_ids):
+    col_map = {
+        "PLAYER_ID": "player_id", "SEASON_ID": "season_id",
+        "TEAM_ID": "team_id", "TEAM_ABBREVIATION": "team_abbreviation",
+        "PLAYER_AGE": "player_age",
+        "GP": "gp", "GS": "gs", "MIN": "min",
+        "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
+        "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
+        "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
+        "OREB": "oreb", "DREB": "dreb", "REB": "reb",
+        "AST": "ast", "STL": "stl", "BLK": "blk",
+        "TOV": "tov", "PF": "pf", "PTS": "pts",
+    }
+
+    def _fetch_career(pid: int) -> pd.DataFrame | None:
+        _rate_limited_sleep()
         try:
-            time.sleep(2)  # Rate limit — avoid 429 / throttling.
             df = _call_with_retries(
-                lambda pid=pid: PlayerCareerStats(
+                lambda: PlayerCareerStats(
                     player_id=pid,
                     timeout=_PER_PLAYER_TIMEOUT,
                 ).get_data_frames()[0],
@@ -1628,29 +1500,24 @@ def populate_player_career_stats(
                 "Failed to fetch career stats for player %d after %d attempts — skipping.",
                 pid, _MAX_RETRIES_PER_PLAYER,
             )
-            continue
-
+            return None
         if df.empty:
-            continue
-
-        col_map = {
-            "PLAYER_ID": "player_id", "SEASON_ID": "season_id",
-            "TEAM_ID": "team_id", "TEAM_ABBREVIATION": "team_abbreviation",
-            "PLAYER_AGE": "player_age",
-            "GP": "gp", "GS": "gs", "MIN": "min",
-            "FGM": "fgm", "FGA": "fga", "FG_PCT": "fg_pct",
-            "FG3M": "fg3m", "FG3A": "fg3a", "FG3_PCT": "fg3_pct",
-            "FTM": "ftm", "FTA": "fta", "FT_PCT": "ft_pct",
-            "OREB": "oreb", "DREB": "dreb", "REB": "reb",
-            "AST": "ast", "STL": "stl", "BLK": "blk",
-            "TOV": "tov", "PF": "pf", "PTS": "pts",
-        }
+            return None
         available = {k: v for k, v in col_map.items() if k in df.columns}
-        mapped = df[list(available.keys())].rename(columns=available)
-        all_rows.append(mapped)
+        return df[list(available.keys())].rename(columns=available)
 
-        if (i + 1) % 50 == 0:
-            logger.info("  … career stats: %d / %d players processed.", i + 1, len(player_ids))
+    all_rows: list[pd.DataFrame] = []
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=_PLAYER_WORKERS) as pool:
+        futures = {pool.submit(_fetch_career, pid): pid for pid in player_ids}
+        for future in as_completed(futures):
+            mapped = future.result()
+            if mapped is not None:
+                all_rows.append(mapped)
+            done += 1
+            if done % _LOG_PROGRESS_INTERVAL == 0:
+                logger.info("  … career stats: %d / %d players processed.", done, len(player_ids))
 
     if not all_rows:
         logger.info("Player_Career_Stats: no career data retrieved.")
@@ -1670,8 +1537,8 @@ def populate_shot_chart(
 ) -> None:
     """Fetch and load shot chart data for all active players.
 
-    Uses :class:`ShotChartDetail` with each player's ID and the season.
-    Rate-limited with a 1-second sleep between requests.
+    Uses a thread pool to fetch multiple players concurrently while
+    respecting the NBA API rate limit via :func:`_rate_limited_sleep`.
 
     Args:
         conn: Open SQLite connection.
@@ -1687,13 +1554,31 @@ def populate_shot_chart(
         return
 
     logger.info("Fetching shot chart for %d players …", len(player_ids))
-    all_rows: list[pd.DataFrame] = []
 
-    for i, pid in enumerate(player_ids):
+    col_map = {
+        "GAME_ID": "game_id", "GAME_EVENT_ID": "game_event_id",
+        "PLAYER_ID": "player_id", "PLAYER_NAME": "player_name",
+        "TEAM_ID": "team_id", "TEAM_NAME": "team_name",
+        "PERIOD": "period",
+        "MINUTES_REMAINING": "minutes_remaining",
+        "SECONDS_REMAINING": "seconds_remaining",
+        "EVENT_TYPE": "event_type", "ACTION_TYPE": "action_type",
+        "SHOT_TYPE": "shot_type",
+        "SHOT_ZONE_BASIC": "shot_zone_basic",
+        "SHOT_ZONE_AREA": "shot_zone_area",
+        "SHOT_ZONE_RANGE": "shot_zone_range",
+        "SHOT_DISTANCE": "shot_distance",
+        "LOC_X": "loc_x", "LOC_Y": "loc_y",
+        "SHOT_ATTEMPTED_FLAG": "shot_attempted_flag",
+        "SHOT_MADE_FLAG": "shot_made_flag",
+        "GAME_DATE": "game_date", "HTM": "htm", "VTM": "vtm",
+    }
+
+    def _fetch_shots(pid: int) -> pd.DataFrame | None:
+        _rate_limited_sleep()
         try:
-            time.sleep(2)
             df = _call_with_retries(
-                lambda pid=pid: ShotChartDetail(
+                lambda: ShotChartDetail(
                     team_id=0,
                     player_id=pid,
                     season_nullable=season,
@@ -1709,36 +1594,26 @@ def populate_shot_chart(
                 "Failed to fetch shot chart for player %d after %d attempts — skipping.",
                 pid, _MAX_RETRIES_PER_PLAYER,
             )
-            continue
-
+            return None
         if df.empty:
-            continue
-
-        col_map = {
-            "GAME_ID": "game_id", "GAME_EVENT_ID": "game_event_id",
-            "PLAYER_ID": "player_id", "PLAYER_NAME": "player_name",
-            "TEAM_ID": "team_id", "TEAM_NAME": "team_name",
-            "PERIOD": "period",
-            "MINUTES_REMAINING": "minutes_remaining",
-            "SECONDS_REMAINING": "seconds_remaining",
-            "EVENT_TYPE": "event_type", "ACTION_TYPE": "action_type",
-            "SHOT_TYPE": "shot_type",
-            "SHOT_ZONE_BASIC": "shot_zone_basic",
-            "SHOT_ZONE_AREA": "shot_zone_area",
-            "SHOT_ZONE_RANGE": "shot_zone_range",
-            "SHOT_DISTANCE": "shot_distance",
-            "LOC_X": "loc_x", "LOC_Y": "loc_y",
-            "SHOT_ATTEMPTED_FLAG": "shot_attempted_flag",
-            "SHOT_MADE_FLAG": "shot_made_flag",
-            "GAME_DATE": "game_date", "HTM": "htm", "VTM": "vtm",
-        }
+            return None
         available = {k: v for k, v in col_map.items() if k in df.columns}
         mapped = df[list(available.keys())].rename(columns=available)
         mapped["season"] = season
-        all_rows.append(mapped)
+        return mapped
 
-        if (i + 1) % 50 == 0:
-            logger.info("  … shot chart: %d / %d players processed.", i + 1, len(player_ids))
+    all_rows: list[pd.DataFrame] = []
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=_PLAYER_WORKERS) as pool:
+        futures = {pool.submit(_fetch_shots, pid): pid for pid in player_ids}
+        for future in as_completed(futures):
+            mapped = future.result()
+            if mapped is not None:
+                all_rows.append(mapped)
+            done += 1
+            if done % _LOG_PROGRESS_INTERVAL == 0:
+                logger.info("  … shot chart: %d / %d players processed.", done, len(player_ids))
 
     if not all_rows:
         logger.info("Shot_Chart: no shot data retrieved.")
@@ -1755,6 +1630,147 @@ def populate_shot_chart(
 # ---------------------------------------------------------------------------
 # Per-game advanced box score ETL pipelines
 # ---------------------------------------------------------------------------
+
+# Column mapping dicts for each box-score endpoint.  Extracted here as
+# module-level constants so ``_fetch_single_game_box_scores`` stays concise.
+
+_COL_MAP_ADVANCED: dict[str, str] = {
+    "gameId": "game_id", "personId": "person_id",
+    "teamId": "team_id", "position": "position",
+    "minutes": "minutes",
+    "estimatedOffensiveRating": "est_off_rating",
+    "offensiveRating": "off_rating",
+    "estimatedDefensiveRating": "est_def_rating",
+    "defensiveRating": "def_rating",
+    "estimatedNetRating": "est_net_rating",
+    "netRating": "net_rating",
+    "assistPercentage": "ast_pct",
+    "assistToTurnover": "ast_to_tov",
+    "assistRatio": "ast_ratio",
+    "offensiveReboundPercentage": "oreb_pct",
+    "defensiveReboundPercentage": "dreb_pct",
+    "reboundPercentage": "reb_pct",
+    "turnoverRatio": "tov_ratio",
+    "effectiveFieldGoalPercentage": "efg_pct",
+    "trueShootingPercentage": "ts_pct",
+    "usagePercentage": "usg_pct",
+    "estimatedUsagePercentage": "est_usg_pct",
+    "estimatedPace": "est_pace",
+    "pace": "pace", "pacePerGame": "pace_per40",
+    "possessions": "possessions", "PIE": "pie",
+}
+
+_COL_MAP_SCORING: dict[str, str] = {
+    "gameId": "game_id", "personId": "person_id",
+    "teamId": "team_id", "minutes": "minutes",
+    "percentageFieldGoalsAttempted2pt": "pct_fga_2pt",
+    "percentageFieldGoalsAttempted3pt": "pct_fga_3pt",
+    "percentagePoints2pt": "pct_pts_2pt",
+    "percentagePointsMidrange2pt": "pct_pts_mid2pt",
+    "percentagePoints3pt": "pct_pts_3pt",
+    "percentagePointsFastBreak": "pct_pts_fast_break",
+    "percentagePointsFreeThrow": "pct_pts_ft",
+    "percentagePointsOffTurnovers": "pct_pts_off_tov",
+    "percentagePointsPaint": "pct_pts_paint",
+    "percentageAssisted2pt": "pct_assisted_2pt",
+    "percentageUnassisted2pt": "pct_unassisted_2pt",
+    "percentageAssisted3pt": "pct_assisted_3pt",
+    "percentageUnassisted3pt": "pct_unassisted_3pt",
+    "percentageAssistedFGM": "pct_assisted_fgm",
+    "percentageUnassistedFGM": "pct_unassisted_fgm",
+}
+
+_COL_MAP_USAGE: dict[str, str] = {
+    "gameId": "game_id", "personId": "person_id",
+    "teamId": "team_id", "minutes": "minutes",
+    "usagePercentage": "usg_pct",
+    "percentageFieldGoalsMade": "pct_fgm",
+    "percentageFieldGoalsAttempted": "pct_fga",
+    "percentageThreePointersMade": "pct_fg3m",
+    "percentageThreePointersAttempted": "pct_fg3a",
+    "percentageFreeThrowsMade": "pct_ftm",
+    "percentageFreeThrowsAttempted": "pct_fta",
+    "percentageOffensiveRebounds": "pct_oreb",
+    "percentageDefensiveRebounds": "pct_dreb",
+    "percentageRebounds": "pct_reb",
+    "percentageAssists": "pct_ast",
+    "percentageTurnovers": "pct_tov",
+    "percentageSteals": "pct_stl",
+    "percentageBlocks": "pct_blk",
+    "percentageBlocksAllowed": "pct_blka",
+    "percentagePersonalFouls": "pct_pf",
+    "percentagePersonalFoulsDrawn": "pct_pfd",
+    "percentagePoints": "pct_pts",
+}
+
+_COL_MAP_TRACKING: dict[str, str] = {
+    "gameId": "game_id", "personId": "person_id",
+    "teamId": "team_id", "teamTricode": "team_tricode",
+    "firstName": "first_name", "familyName": "family_name",
+    "position": "position", "comment": "comment",
+    "jerseyNum": "jersey_num", "minutes": "minutes",
+    "speed": "speed", "distance": "distance",
+    "reboundChancesOffensive": "rebound_chances_offensive",
+    "reboundChancesDefensive": "rebound_chances_defensive",
+    "reboundChancesTotal": "rebound_chances_total",
+    "touches": "touches",
+    "secondaryAssists": "secondary_assists",
+    "freeThrowAssists": "free_throw_assists",
+    "passes": "passes", "assists": "assists",
+    "contestedFieldGoalsMade": "contested_fg_made",
+    "contestedFieldGoalsAttempted": "contested_fg_attempted",
+    "contestedFieldGoalPercentage": "contested_fg_pct",
+    "uncontestedFieldGoalsMade": "uncontested_fg_made",
+    "uncontestedFieldGoalsAttempted": "uncontested_fg_attempted",
+    "uncontestedFieldGoalPercentage": "uncontested_fg_pct",
+    "fieldGoalPercentage": "fg_pct",
+    "defendedAtRimFieldGoalsMade": "defended_at_rim_fg_made",
+    "defendedAtRimFieldGoalsAttempted": "defended_at_rim_fg_attempted",
+    "defendedAtRimFieldGoalPercentage": "defended_at_rim_fg_pct",
+}
+
+_COL_MAP_MATCHUPS: dict[str, str] = {
+    "gameId": "game_id",
+    "personIdOff": "person_id_off",
+    "personIdDef": "person_id_def",
+    "teamId": "team_id",
+    "matchupMinutes": "matchup_min",
+    "matchupMinutesSort": "matchup_min_sort",
+    "partialPossessions": "partial_poss",
+    "percentageDefenderTotalTime": "pct_def_total_time",
+    "percentageOffensiveTotalTime": "pct_off_total_time",
+    "percentageTotalTimeBothOn": "pct_total_time_both_on",
+    "switchesOn": "switches_on",
+    "playerPoints": "player_pts",
+    "teamPoints": "team_pts",
+    "matchupAssists": "matchup_ast",
+    "matchupPotentialAssists": "matchup_potential_ast",
+    "matchupTurnovers": "matchup_tov",
+    "matchupBlocks": "matchup_blk",
+    "matchupFieldGoalsMade": "matchup_fgm",
+    "matchupFieldGoalsAttempted": "matchup_fga",
+    "matchupFieldGoalPercentage": "matchup_fg_pct",
+    "matchupThreePointersMade": "matchup_fg3m",
+    "matchupThreePointersAttempted": "matchup_fg3a",
+    "matchupThreePointerPercentage": "matchup_fg3_pct",
+    "helpBlocks": "help_blk",
+    "helpFieldGoalsMade": "help_fgm",
+    "helpFieldGoalsAttempted": "help_fga",
+    "helpFieldGoalPercentage": "help_fg_pct",
+    "matchupFreeThrowsMade": "matchup_ftm",
+    "matchupFreeThrowsAttempted": "matchup_fta",
+    "shootingFouls": "shooting_fouls",
+}
+
+# Tuple of (endpoint_class, col_map, table_name, description) for each
+# box-score type.  Used by ``_fetch_single_game_box_scores``.
+_BOX_SCORE_ENDPOINTS: tuple[tuple[Any, dict[str, str], str, str], ...] = (
+    (BoxScoreAdvancedV3,     _COL_MAP_ADVANCED,  "Box_Score_Advanced",     "BoxScoreAdvancedV3"),
+    (BoxScoreScoringV3,      _COL_MAP_SCORING,   "Box_Score_Scoring",      "BoxScoreScoringV3"),
+    (BoxScoreUsageV3,        _COL_MAP_USAGE,     "Box_Score_Usage",        "BoxScoreUsageV3"),
+    (BoxScorePlayerTrackV3,  _COL_MAP_TRACKING,  "Player_Tracking_Stats",  "BoxScorePlayerTrackV3"),
+    (BoxScoreMatchupsV3,     _COL_MAP_MATCHUPS,  "Box_Score_Matchups",     "BoxScoreMatchupsV3"),
+)
 
 
 def _get_game_ids_for_season(conn: sqlite3.Connection, season: str = SEASON) -> list[str]:
@@ -1781,7 +1797,8 @@ def populate_game_advanced_box_scores(
     """Fetch and load advanced, scoring, usage, tracking, and matchup box
     scores for games.
 
-    For each game, makes up to 5 API calls (one per box score type).  Skips
+    Uses a thread pool to fetch multiple games concurrently.  Within each
+    game the five box-score types are also fetched in parallel.  Skips
     games whose ``game_id`` is already present in ``Box_Score_Advanced`` to
     avoid redundant fetches.
 
@@ -1813,235 +1830,90 @@ def populate_game_advanced_box_scores(
 
     logger.info("Fetching advanced box scores for %d games …", len(new_game_ids))
 
-    for i, gid in enumerate(new_game_ids):
-        _fetch_single_game_box_scores(conn, gid, season)
-        if (i + 1) % 25 == 0:
-            logger.info("  … box scores: %d / %d games processed.", i + 1, len(new_game_ids))
-            conn.commit()  # Periodic commit to avoid losing progress.
+    done = 0
+    with ThreadPoolExecutor(max_workers=_GAME_WORKERS) as pool:
+        futures = {
+            pool.submit(_fetch_single_game_box_scores, game_id=gid, season=season): gid
+            for gid in new_game_ids
+        }
+        for future in as_completed(futures):
+            results = future.result()
+            # Write all returned DataFrames to the database (main thread).
+            for table_name, df in results.items():
+                df.to_sql(table_name, conn, if_exists="append", index=False)
+            done += 1
+            if done % 25 == 0:
+                logger.info("  … box scores: %d / %d games processed.", done, len(new_game_ids))
+                conn.commit()  # Periodic commit to avoid losing progress.
 
     logger.info("Game box scores: completed processing %d games.", len(new_game_ids))
 
 
 def _fetch_single_game_box_scores(
-    conn: sqlite3.Connection, game_id: str, season: str,
-) -> None:
-    """Fetch all 5 advanced box score types for a single game and insert.
+    game_id: str, season: str,
+) -> dict[str, pd.DataFrame]:
+    """Fetch all 5 advanced box score types for a single game concurrently.
 
     Each box score endpoint call is wrapped in a try/except so a failure
-    on one type does not block the others.
+    on one type does not block the others.  Returns a mapping of
+    table-name → DataFrame for the caller to insert.
 
     Args:
-        conn: Open SQLite connection.
         game_id: NBA game ID string.
         season: NBA season string.
+
+    Returns:
+        Dict mapping SQL table names to DataFrames ready for insertion.
     """
-    # --- Box Score Advanced ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScoreAdvancedV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScoreAdvancedV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id", "personId": "person_id",
-                "teamId": "team_id", "position": "position",
-                "minutes": "minutes",
-                "estimatedOffensiveRating": "est_off_rating",
-                "offensiveRating": "off_rating",
-                "estimatedDefensiveRating": "est_def_rating",
-                "defensiveRating": "def_rating",
-                "estimatedNetRating": "est_net_rating",
-                "netRating": "net_rating",
-                "assistPercentage": "ast_pct",
-                "assistToTurnover": "ast_to_tov",
-                "assistRatio": "ast_ratio",
-                "offensiveReboundPercentage": "oreb_pct",
-                "defensiveReboundPercentage": "dreb_pct",
-                "reboundPercentage": "reb_pct",
-                "turnoverRatio": "tov_ratio",
-                "effectiveFieldGoalPercentage": "efg_pct",
-                "trueShootingPercentage": "ts_pct",
-                "usagePercentage": "usg_pct",
-                "estimatedUsagePercentage": "est_usg_pct",
-                "estimatedPace": "est_pace",
-                "pace": "pace", "pacePerGame": "pace_per40",
-                "possessions": "possessions", "PIE": "pie",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Box_Score_Advanced", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScoreAdvancedV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    results: dict[str, pd.DataFrame] = {}
+    # Each worker writes to a unique key, so the lock only protects the
+    # dict from concurrent mutation — not from key-level races.
+    results_lock = threading.Lock()
 
-    # --- Box Score Scoring ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScoreScoringV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScoreScoringV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id", "personId": "person_id",
-                "teamId": "team_id", "minutes": "minutes",
-                "percentageFieldGoalsAttempted2pt": "pct_fga_2pt",
-                "percentageFieldGoalsAttempted3pt": "pct_fga_3pt",
-                "percentagePoints2pt": "pct_pts_2pt",
-                "percentagePointsMidrange2pt": "pct_pts_mid2pt",
-                "percentagePoints3pt": "pct_pts_3pt",
-                "percentagePointsFastBreak": "pct_pts_fast_break",
-                "percentagePointsFreeThrow": "pct_pts_ft",
-                "percentagePointsOffTurnovers": "pct_pts_off_tov",
-                "percentagePointsPaint": "pct_pts_paint",
-                "percentageAssisted2pt": "pct_assisted_2pt",
-                "percentageUnassisted2pt": "pct_unassisted_2pt",
-                "percentageAssisted3pt": "pct_assisted_3pt",
-                "percentageUnassisted3pt": "pct_unassisted_3pt",
-                "percentageAssistedFGM": "pct_assisted_fgm",
-                "percentageUnassistedFGM": "pct_unassisted_fgm",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Box_Score_Scoring", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScoreScoringV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    def _make_fetcher(
+        endpoint_class: Any,
+        col_map: dict[str, str],
+        table_name: str,
+        desc_name: str,
+    ) -> Callable[[], None]:
+        """Return a closure that fetches one box-score type for this game."""
+        def _fetcher() -> None:
+            _rate_limited_sleep()
+            try:
+                df = _call_with_retries(
+                    lambda: endpoint_class(
+                        game_id=game_id, timeout=_PER_GAME_TIMEOUT,
+                    ).get_data_frames()[0],
+                    description=f"{desc_name}(game={game_id})",
+                )
+                if not df.empty:
+                    available = {k: v for k, v in col_map.items() if k in df.columns}
+                    result = df[list(available.keys())].rename(columns=available)
+                    result["season"] = season
+                    if "game_id" not in result.columns:
+                        result["game_id"] = game_id
+                    with results_lock:
+                        results[table_name] = result
+            except Exception:
+                logger.debug(
+                    "%s failed for game %s after %d attempts.",
+                    desc_name, game_id, _MAX_RETRIES,
+                )
+        return _fetcher
 
-    # --- Box Score Usage ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScoreUsageV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScoreUsageV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id", "personId": "person_id",
-                "teamId": "team_id", "minutes": "minutes",
-                "usagePercentage": "usg_pct",
-                "percentageFieldGoalsMade": "pct_fgm",
-                "percentageFieldGoalsAttempted": "pct_fga",
-                "percentageThreePointersMade": "pct_fg3m",
-                "percentageThreePointersAttempted": "pct_fg3a",
-                "percentageFreeThrowsMade": "pct_ftm",
-                "percentageFreeThrowsAttempted": "pct_fta",
-                "percentageOffensiveRebounds": "pct_oreb",
-                "percentageDefensiveRebounds": "pct_dreb",
-                "percentageRebounds": "pct_reb",
-                "percentageAssists": "pct_ast",
-                "percentageTurnovers": "pct_tov",
-                "percentageSteals": "pct_stl",
-                "percentageBlocks": "pct_blk",
-                "percentageBlocksAllowed": "pct_blka",
-                "percentagePersonalFouls": "pct_pf",
-                "percentagePersonalFoulsDrawn": "pct_pfd",
-                "percentagePoints": "pct_pts",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Box_Score_Usage", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScoreUsageV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    # Build a fetcher for each box-score endpoint from the module-level
+    # ``_BOX_SCORE_ENDPOINTS`` registry and run them all concurrently.
+    fetchers = [
+        _make_fetcher(cls, cmap, tbl, desc)
+        for cls, cmap, tbl, desc in _BOX_SCORE_ENDPOINTS
+    ]
 
-    # --- Box Score Player Tracking ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScorePlayerTrackV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScorePlayerTrackV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id", "personId": "person_id",
-                "teamId": "team_id", "teamTricode": "team_tricode",
-                "firstName": "first_name", "familyName": "family_name",
-                "position": "position", "comment": "comment",
-                "jerseyNum": "jersey_num", "minutes": "minutes",
-                "speed": "speed", "distance": "distance",
-                "reboundChancesOffensive": "rebound_chances_offensive",
-                "reboundChancesDefensive": "rebound_chances_defensive",
-                "reboundChancesTotal": "rebound_chances_total",
-                "touches": "touches",
-                "secondaryAssists": "secondary_assists",
-                "freeThrowAssists": "free_throw_assists",
-                "passes": "passes", "assists": "assists",
-                "contestedFieldGoalsMade": "contested_fg_made",
-                "contestedFieldGoalsAttempted": "contested_fg_attempted",
-                "contestedFieldGoalPercentage": "contested_fg_pct",
-                "uncontestedFieldGoalsMade": "uncontested_fg_made",
-                "uncontestedFieldGoalsAttempted": "uncontested_fg_attempted",
-                "uncontestedFieldGoalPercentage": "uncontested_fg_pct",
-                "fieldGoalPercentage": "fg_pct",
-                "defendedAtRimFieldGoalsMade": "defended_at_rim_fg_made",
-                "defendedAtRimFieldGoalsAttempted": "defended_at_rim_fg_attempted",
-                "defendedAtRimFieldGoalPercentage": "defended_at_rim_fg_pct",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Player_Tracking_Stats", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScorePlayerTrackV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    with ThreadPoolExecutor(max_workers=_BOX_SCORE_TYPE_WORKERS) as pool:
+        futs = [pool.submit(fn) for fn in fetchers]
+        for f in as_completed(futs):
+            f.result()  # Propagate unexpected errors; expected ones handled inside.
 
-    # --- Box Score Matchups ---
-    try:
-        time.sleep(1)
-        df = _call_with_retries(
-            lambda: BoxScoreMatchupsV3(game_id=game_id, timeout=_PER_GAME_TIMEOUT).get_data_frames()[0],
-            description=f"BoxScoreMatchupsV3(game={game_id})",
-        )
-        if not df.empty:
-            col_map = {
-                "gameId": "game_id",
-                "personIdOff": "person_id_off",
-                "personIdDef": "person_id_def",
-                "teamId": "team_id",
-                "matchupMinutes": "matchup_min",
-                "matchupMinutesSort": "matchup_min_sort",
-                "partialPossessions": "partial_poss",
-                "percentageDefenderTotalTime": "pct_def_total_time",
-                "percentageOffensiveTotalTime": "pct_off_total_time",
-                "percentageTotalTimeBothOn": "pct_total_time_both_on",
-                "switchesOn": "switches_on",
-                "playerPoints": "player_pts",
-                "teamPoints": "team_pts",
-                "matchupAssists": "matchup_ast",
-                "matchupPotentialAssists": "matchup_potential_ast",
-                "matchupTurnovers": "matchup_tov",
-                "matchupBlocks": "matchup_blk",
-                "matchupFieldGoalsMade": "matchup_fgm",
-                "matchupFieldGoalsAttempted": "matchup_fga",
-                "matchupFieldGoalPercentage": "matchup_fg_pct",
-                "matchupThreePointersMade": "matchup_fg3m",
-                "matchupThreePointersAttempted": "matchup_fg3a",
-                "matchupThreePointerPercentage": "matchup_fg3_pct",
-                "helpBlocks": "help_blk",
-                "helpFieldGoalsMade": "help_fgm",
-                "helpFieldGoalsAttempted": "help_fga",
-                "helpFieldGoalPercentage": "help_fg_pct",
-                "matchupFreeThrowsMade": "matchup_ftm",
-                "matchupFreeThrowsAttempted": "matchup_fta",
-                "shootingFouls": "shooting_fouls",
-            }
-            available = {k: v for k, v in col_map.items() if k in df.columns}
-            result = df[list(available.keys())].rename(columns=available)
-            result["season"] = season
-            if "game_id" not in result.columns:
-                result["game_id"] = game_id
-            result.to_sql("Box_Score_Matchups", conn, if_exists="append", index=False)
-    except Exception:
-        logger.debug("BoxScoreMatchupsV3 failed for game %s after %d attempts.", game_id, _MAX_RETRIES)
+    return results
 
 
 # ---------------------------------------------------------------------------

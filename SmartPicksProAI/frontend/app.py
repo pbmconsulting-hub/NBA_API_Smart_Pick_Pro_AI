@@ -19,7 +19,8 @@ Start the dashboard::
 import pandas as pd
 import streamlit as st
 
-from typing import Optional
+from typing import Any
+from collections.abc import Callable
 
 from api_service import (
     get_defense_vs_position,
@@ -60,8 +61,12 @@ from api_service import (
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Page configuration
+# Page configuration & constants
 # ═══════════════════════════════════════════════════════════════════════════
+
+MAX_GAME_COLUMNS = 4
+MAX_RECENT_GAMES = 20
+MAX_SEARCH_RESULTS = 10
 
 st.set_page_config(
     page_title="SmartPicksProAI",
@@ -74,16 +79,16 @@ st.set_page_config(
 # Session-state navigation
 # ═══════════════════════════════════════════════════════════════════════════
 
-if "page" not in st.session_state:
-    st.session_state.page = "home"
-if "selected_game_id" not in st.session_state:
-    st.session_state.selected_game_id = None
-if "selected_player_id" not in st.session_state:
-    st.session_state.selected_player_id = None
-if "selected_team_id" not in st.session_state:
-    st.session_state.selected_team_id = None
-if "game_context" not in st.session_state:
-    st.session_state.game_context = {}
+_DEFAULT_STATE: dict[str, Any] = {
+    "page": "home",
+    "selected_game_id": None,
+    "selected_player_id": None,
+    "selected_team_id": None,
+    "game_context": {},
+}
+for _key, _default in _DEFAULT_STATE.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _default
 
 
 def _nav(page: str, **kwargs) -> None:
@@ -368,7 +373,11 @@ st.markdown(
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _show_df(data, columns=None, height=None):
+def _show_df(
+    data: list[dict[str, Any]] | pd.DataFrame,
+    columns: list[str] | None = None,
+    height: int | None = None,
+) -> None:
     """Display data as a styled dataframe."""
     if not data:
         st.markdown('<div class="empty-state">No data available.</div>',
@@ -385,7 +394,13 @@ def _show_df(data, columns=None, height=None):
     st.dataframe(df, **kwargs)
 
 
-def _player_button(player_id, name, position=None, team=None, key_prefix=""):
+def _player_button(
+    player_id: int,
+    name: str,
+    position: str | None = None,
+    team: str | None = None,
+    key_prefix: str = "",
+) -> None:
     """Render a clickable button for a player that navigates to their profile."""
     label_parts = [name]
     if position:
@@ -399,7 +414,7 @@ def _player_button(player_id, name, position=None, team=None, key_prefix=""):
         st.rerun()
 
 
-def _game_button(game, key_prefix=""):
+def _game_button(game: dict[str, Any], key_prefix: str = "") -> None:
     """Render a clickable game card button."""
     matchup = game.get("matchup", "TBD")
     home_score = game.get("home_score")
@@ -526,17 +541,15 @@ with st.sidebar:
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Page router
+# Page functions
 # ═══════════════════════════════════════════════════════════════════════════
-
-current_page = st.session_state.page
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # PAGE: HOME
 # ─────────────────────────────────────────────────────────────────────────
 
-if current_page == "home":
+def _page_home() -> None:
     st.title("🏀 SmartPicks Pro AI")
     st.caption("Your premium NBA intelligence platform — click any game or player to explore")
 
@@ -546,7 +559,7 @@ if current_page == "home":
 
     games = get_todays_games()
     if games:
-        cols = st.columns(min(len(games), 4))
+        cols = st.columns(min(len(games), MAX_GAME_COLUMNS))
         for idx, game in enumerate(games):
             with cols[idx % len(cols)]:
                 _game_button(game, key_prefix="today")
@@ -562,7 +575,7 @@ if current_page == "home":
     recent = get_recent_games()
     if recent:
         # Show as clickable list
-        for idx, game in enumerate(recent[:20]):
+        for idx, game in enumerate(recent[:MAX_RECENT_GAMES]):
             _game_button(game, key_prefix="recent")
     else:
         st.info("No recent game data available.")
@@ -591,7 +604,7 @@ if current_page == "home":
     if player_query.strip():
         results = search_players(player_query.strip())
         if results:
-            for r in results[:10]:
+            for r in results[:MAX_SEARCH_RESULTS]:
                 _player_button(
                     r["player_id"],
                     r.get("full_name", ""),
@@ -611,7 +624,7 @@ if current_page == "home":
 # PAGE: GAME DETAIL
 # ─────────────────────────────────────────────────────────────────────────
 
-elif current_page == "game_detail":
+def _page_game_detail() -> None:
     gid = st.session_state.selected_game_id
     ctx = st.session_state.game_context or {}
 
@@ -793,7 +806,7 @@ elif current_page == "game_detail":
 # PAGE: PLAYER PROFILE
 # ─────────────────────────────────────────────────────────────────────────
 
-elif current_page == "player_profile":
+def _page_player_profile() -> None:
     pid = st.session_state.selected_player_id
 
     if st.button("← Back", key="back_from_player"):
@@ -1055,7 +1068,7 @@ elif current_page == "player_profile":
 # PAGE: STANDINGS
 # ─────────────────────────────────────────────────────────────────────────
 
-elif current_page == "standings":
+def _page_standings() -> None:
     st.title("🏆 League Standings")
 
     with st.expander("ℹ️ Understanding League Standings", expanded=False):
@@ -1113,7 +1126,7 @@ while seeds 7–10 compete in the **Play-In Tournament**.
 # PAGE: TEAMS BROWSE
 # ─────────────────────────────────────────────────────────────────────────
 
-elif current_page == "teams_browse":
+def _page_teams_browse() -> None:
     st.title("🏟️ Teams")
 
     all_teams = get_teams()
@@ -1153,7 +1166,7 @@ elif current_page == "teams_browse":
 # PAGE: TEAM DETAIL
 # ─────────────────────────────────────────────────────────────────────────
 
-elif current_page == "team_detail":
+def _page_team_detail() -> None:
     tid = st.session_state.selected_team_id
 
     if st.button("← Back to Teams", key="back_teams"):
@@ -1303,7 +1316,7 @@ elif current_page == "team_detail":
 # PAGE: LEADERS & STATS
 # ─────────────────────────────────────────────────────────────────────────
 
-elif current_page == "leaders":
+def _page_leaders() -> None:
     st.title("📊 League Leaders & Season Stats")
 
     with st.expander("ℹ️ Understanding Leaders & Stats", expanded=False):
@@ -1399,7 +1412,7 @@ Great for spotting the best offensive teams (high PTS), defensive teams
 # PAGE: DEFENSE VS POSITION
 # ─────────────────────────────────────────────────────────────────────────
 
-elif current_page == "defense":
+def _page_defense() -> None:
     st.title("🛡️ Defense vs Position")
 
     with st.expander("ℹ️ Understanding Defense vs Position", expanded=False):
@@ -1545,7 +1558,7 @@ Boston.
 # PAGE: MORE DATA
 # ─────────────────────────────────────────────────────────────────────────
 
-elif current_page == "more":
+def _page_more() -> None:
     st.title("📈 Additional Data")
 
     m_tab_schedule, m_tab_lineups, m_tab_draft = st.tabs([
@@ -1587,3 +1600,27 @@ elif current_page == "more":
             ], height=600)
         else:
             st.info("No draft history data.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Page router
+# ═══════════════════════════════════════════════════════════════════════════
+
+_PAGE_DISPATCH: dict[str, Callable[[], None]] = {
+    "home": _page_home,
+    "game_detail": _page_game_detail,
+    "player_profile": _page_player_profile,
+    "standings": _page_standings,
+    "teams_browse": _page_teams_browse,
+    "team_detail": _page_team_detail,
+    "leaders": _page_leaders,
+    "defense": _page_defense,
+    "more": _page_more,
+}
+
+_page_fn = _PAGE_DISPATCH.get(st.session_state.page)
+if _page_fn is not None:
+    _page_fn()
+else:
+    st.warning(f"Unknown page: {st.session_state.page}")
+    _page_home()
