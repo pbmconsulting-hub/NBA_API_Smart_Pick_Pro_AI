@@ -37,6 +37,7 @@ from styles.theme import (
     get_sidebar_brand_html,
     get_summary_cards_html,
     get_tier_badge_html,
+    get_verdict_banner_html,
 )
 from tracking.database import initialize_database as _init_tracker_db
 from tracking.bet_tracker import (
@@ -1439,7 +1440,7 @@ def _page_prop_analyzer() -> None:
     except Exception:
         pass  # Never block UI for tracking errors
 
-    # ── Results display ─────────────────────────────────────────────
+    # ── Extract core data ───────────────────────────────────────────
     conf = result.get("confidence", {})
     tier = conf.get("tier", "Bronze")
     tier_emoji = conf.get("tier_emoji", "🥉")
@@ -1447,168 +1448,108 @@ def _page_prop_analyzer() -> None:
     direction = result.get("direction", "OVER")
     model_prob = result.get("model_probability", 0.5)
     edge = result.get("edge_pct", 0.0)
-
-    # Header card
-    hdr_cols = st.columns([2, 1, 1, 1, 1])
-    hdr_cols[0].markdown(
-        f"### {tier_emoji} {player_name}\n"
-        f"**{stat_type.upper()}** {direction} {prop_line}  •  "
-        f"vs {result.get('opponent', '???')}  •  {platform.title()}"
-    )
-    hdr_cols[1].metric("Confidence", f"{score:.0f}/100", delta=tier)
-    hdr_cols[2].metric("Win Prob", f"{model_prob:.1%}")
-    hdr_cols[3].metric("Edge", f"{edge:+.1f}%")
-    hdr_cols[4].metric("Direction", f"{'🟢' if direction == 'OVER' else '🔴'} {direction}")
-
-    # ── Bankroll & Regime row ───────────────────────────────────────
+    explanation = result.get("explanation", {})
+    proj = result.get("projection", {})
+    sim = result.get("simulation", {})
+    forces = result.get("forces", {})
     bankroll = result.get("bankroll", {})
     regime = result.get("regime", {})
     kelly_frac = bankroll.get("kelly_fraction", 0.0)
     regime_changed = regime.get("regime_changed", False)
     regime_dir = regime.get("direction", "stable")
+    team_abbrev = result.get("team", "???")
+    opp_abbrev = result.get("opponent", "???")
 
-    info_cols = st.columns([1, 1, 1, 1])
-    info_cols[0].metric(
-        "Kelly Sizing",
-        bankroll.get("recommended_pct", "0.00%"),
-        delta=bankroll.get("kelly_mode", "quarter").title(),
-    )
-    regime_label = f"{'⚠️ ' if regime_changed else '✅ '}{regime_dir.title()}"
-    info_cols[1].metric(
-        "Regime",
-        regime_label,
-        delta=f"Magnitude: {regime.get('magnitude', 0.0):.1f}" if regime_changed else "Stable",
-        delta_color="off" if not regime_changed else ("normal" if regime_dir == "up" else "inverse"),
-    )
-    info_cols[2].metric(
-        "Payout",
-        f"{bankroll.get('payout_multiplier', 1.909):.3f}x",
-    )
-    if kelly_frac > 0:
-        # Show example dollar bet for example bankroll
-        example_bet = round(kelly_frac * EXAMPLE_BANKROLL, 2)
-        info_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", f"${example_bet:.2f}")
-    else:
-        info_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", "No bet")
+    # ── Player Result Card ──────────────────────────────────────────
+    st.markdown('<div class="player-result-card">', unsafe_allow_html=True)
 
-    st.divider()
+    # Card header: player name, matchup info, tier badge
+    dir_icon = "🟢" if direction == "OVER" else "🔴"
+    st.markdown(
+        f"""<div class="player-card-header">
+            <div>
+                <div class="player-card-name">{tier_emoji} {player_name}</div>
+                <div class="player-card-meta">
+                    {team_abbrev} vs {opp_abbrev}  ·  {stat_type.upper()} {direction} {prop_line}  ·  {platform.title()}
+                </div>
+            </div>
+            <div class="player-card-tier">
+                {get_tier_badge_html(tier)}
+            </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
-    # ── Explanation ──────────────────────────────────────────────────
-    explanation = result.get("explanation", {})
+    st.markdown('<div class="player-card-body">', unsafe_allow_html=True)
+
+    # ── Joseph M Smith's Verdict ────────────────────────────────────
+    verdict_text = explanation.get("verdict", "")
     tldr = explanation.get("tldr", "")
-    if tldr:
-        st.markdown(f"**TL;DR:** {tldr}")
+    if verdict_text:
+        st.markdown(get_verdict_banner_html(verdict_text), unsafe_allow_html=True)
+    elif tldr:
+        st.markdown(get_verdict_banner_html(tldr), unsafe_allow_html=True)
 
-    # ── Projection & Simulation ─────────────────────────────────────
-    proj = result.get("projection", {})
-    sim = result.get("simulation", {})
+    # ── Quick Metrics Row ───────────────────────────────────────────
+    qm = st.columns([1, 1, 1, 1, 1])
+    qm[0].metric("Confidence", f"{score:.0f}/100", delta=tier)
+    qm[1].metric("Win Prob", f"{model_prob:.1%}")
+    qm[2].metric("Edge", f"{edge:+.1f}%")
+    qm[3].metric("Direction", f"{dir_icon} {direction}")
+    kelly_pct = bankroll.get("recommended_pct", "0.00%")
+    qm[4].metric("Kelly Size", kelly_pct)
 
-    col_a, col_b = st.columns(2)
+    # ── Tabbed Sections ─────────────────────────────────────────────
+    tab_info, tab_pred, tab_bet = st.tabs([
+        "📋 Player Info & Stats",
+        "🔮 Predictions & Analysis",
+        "💰 Bet Sizing & Verdict",
+    ])
 
-    with col_a:
-        st.subheader("📊 Projection")
-        proj_metrics = {
-            "Projected Points": proj.get("projected_points"),
-            "Projected Rebounds": proj.get("projected_rebounds"),
-            "Projected Assists": proj.get("projected_assists"),
-            "Projected Threes": proj.get("projected_threes"),
-            "Projected Steals": proj.get("projected_steals"),
-            "Projected Blocks": proj.get("projected_blocks"),
-            "Pace Factor": proj.get("pace_factor"),
-            "Defense Factor": proj.get("defense_factor"),
-            "Home/Away Factor": proj.get("home_away_factor"),
-            "Rest Factor": proj.get("rest_factor"),
-            "Blowout Risk": proj.get("blowout_risk"),
-        }
-        for label, val in proj_metrics.items():
-            if val is not None:
-                st.text(f"  {label}: {val}")
+    # ══════════════════════════════════════════════════════════════
+    # TAB 1: Player Info & Stats
+    # ══════════════════════════════════════════════════════════════
+    with tab_info:
+        # Matchup summary
+        st.subheader(f"🏀 {player_name} — {team_abbrev} vs {opp_abbrev}")
 
-    with col_b:
-        st.subheader("🎲 Simulation")
-        sim_metrics = {
-            "Simulated Mean": sim.get("simulated_mean"),
-            "Simulated Std": sim.get("simulated_std"),
-            "P(Over)": sim.get("probability_over"),
-            "10th Percentile": sim.get("percentile_10"),
-            "50th Percentile": sim.get("percentile_50"),
-            "90th Percentile": sim.get("percentile_90"),
-            "90% CI Low": sim.get("ci_90_low"),
-            "90% CI High": sim.get("ci_90_high"),
-            "Simulations Run": sim.get("simulations_run"),
-        }
-        for label, val in sim_metrics.items():
-            if val is not None:
-                display = f"{val:.3f}" if isinstance(val, float) else str(val)
-                st.text(f"  {label}: {display}")
+        info_c1, info_c2 = st.columns(2)
 
-    st.divider()
+        with info_c1:
+            st.markdown("**Projection Factors**")
+            proj_metrics = {
+                "Projected Points": proj.get("projected_points"),
+                "Projected Rebounds": proj.get("projected_rebounds"),
+                "Projected Assists": proj.get("projected_assists"),
+                "Projected Threes": proj.get("projected_threes"),
+                "Projected Steals": proj.get("projected_steals"),
+                "Projected Blocks": proj.get("projected_blocks"),
+            }
+            for label, val in proj_metrics.items():
+                if val is not None:
+                    st.text(f"  {label}: {val}")
 
-    # ── Directional Forces ──────────────────────────────────────────
-    forces = result.get("forces", {})
-    over_forces = forces.get("over_forces", [])
-    under_forces = forces.get("under_forces", [])
+        with info_c2:
+            st.markdown("**Context Adjustments**")
+            ctx_metrics = {
+                "Pace Factor": proj.get("pace_factor"),
+                "Defense Factor": proj.get("defense_factor"),
+                "Home/Away Factor": proj.get("home_away_factor"),
+                "Rest Factor": proj.get("rest_factor"),
+                "Blowout Risk": proj.get("blowout_risk"),
+            }
+            for label, val in ctx_metrics.items():
+                if val is not None:
+                    st.text(f"  {label}: {val}")
 
-    col_c, col_d = st.columns(2)
-    with col_c:
-        st.subheader("🟢 OVER Forces")
-        if over_forces:
-            for f in over_forces:
-                name = f.get("name", f.get("force_name", "Unknown"))
-                strength = f.get("strength", f.get("magnitude", 0))
-                st.text(f"  ↑ {name}: {strength:.2f}")
-        else:
-            st.caption("No OVER forces detected.")
-
-    with col_d:
-        st.subheader("🔴 UNDER Forces")
-        if under_forces:
-            for f in under_forces:
-                name = f.get("name", f.get("force_name", "Unknown"))
-                strength = f.get("strength", f.get("magnitude", 0))
-                st.text(f"  ↓ {name}: {strength:.2f}")
-        else:
-            st.caption("No UNDER forces detected.")
-
-    st.divider()
-
-    # ── Phase 4: Advanced Insights ──────────────────────────────────
-
-    # Game Script Simulation
-    game_script = result.get("game_script", {})
-    if game_script and "error" not in game_script:
-        with st.expander("🎬 Game Script Simulation", expanded=False):
-            gs_cols = st.columns([1, 1, 1, 1])
-            gs_cols[0].metric(
-                "Blended Mean",
-                f"{game_script.get('blended_mean', 0):.1f}",
-                delta=f"Script: {game_script.get('game_script_mean', 0):.1f}",
-            )
-            gs_cols[1].metric(
-                "Flat Mean",
-                f"{game_script.get('flat_mean', 0):.1f}",
-            )
-            gs_cols[2].metric(
-                "Blowout Rate",
-                f"{game_script.get('blowout_game_rate', 0):.1%}",
-            )
-            gs_cols[3].metric(
-                "Player Tier",
-                game_script.get("player_tier", "rotation").title(),
-            )
-            st.caption(
-                f"Blend: {game_script.get('blend_weight', 0.3):.0%} game-script "
-                f"+ {1 - game_script.get('blend_weight', 0.3):.0%} flat simulation."
-            )
-
-    # Matchup History
-    matchup = result.get("matchup_history", {})
-    if matchup and "error" not in matchup:
-        with st.expander("🏀 Matchup History", expanded=False):
+        # Matchup History
+        matchup = result.get("matchup_history", {})
+        if matchup and "error" not in matchup:
+            st.divider()
+            st.markdown("**Matchup History**")
             if matchup.get("cold_start"):
                 st.info(
-                    f"Fewer than 5 games vs {result.get('opponent', '???')} — "
-                    "matchup adjustment is neutral."
+                    f"Fewer than 5 games vs {opp_abbrev} — matchup adjustment is neutral."
                 )
             else:
                 mh_cols = st.columns([1, 1, 1, 1])
@@ -1617,10 +1558,7 @@ def _page_prop_analyzer() -> None:
                     "Avg vs Team",
                     f"{avg_vs:.1f}" if avg_vs is not None else "N/A",
                 )
-                mh_cols[1].metric(
-                    "Games Found",
-                    matchup.get("games_found", 0),
-                )
+                mh_cols[1].metric("Games Found", matchup.get("games_found", 0))
                 fav = matchup.get("matchup_favorability_score", 50)
                 mh_cols[2].metric(
                     "Favorability",
@@ -1636,10 +1574,11 @@ def _page_prop_analyzer() -> None:
                     delta_color="normal" if adj > 1.0 else ("inverse" if adj < 1.0 else "off"),
                 )
 
-    # Rotation / Minutes Trend
-    rotation_data = result.get("rotation", {})
-    if rotation_data and "error" not in rotation_data:
-        with st.expander("⏱️ Minutes & Rotation", expanded=False):
+        # Rotation / Minutes
+        rotation_data = result.get("rotation", {})
+        if rotation_data and "error" not in rotation_data:
+            st.divider()
+            st.markdown("**Minutes & Rotation**")
             rt_cols = st.columns([1, 1, 1])
             min_adj = rotation_data.get("minutes_adjustment", 1.0)
             rt_cols[0].metric(
@@ -1662,10 +1601,104 @@ def _page_prop_analyzer() -> None:
                 rt_cols[1].metric("Role Change", "✅ None")
                 rt_cols[2].metric("Status", "Stable rotation")
 
-    # Distribution Cross-Check
-    dist_check = result.get("distribution_check", {})
-    if dist_check and "error" not in dist_check:
-        with st.expander("📐 Distribution Cross-Check", expanded=False):
+        # Player Efficiency
+        eff = result.get("efficiency", {})
+        if eff and "error" not in eff:
+            st.divider()
+            st.markdown("**Player Efficiency Profile**")
+            eff_cols = st.columns([1, 1, 1, 1])
+            eff_cols[0].metric("True Shooting", f"{eff.get('ts_pct', 0):.1%}")
+            eff_cols[1].metric("eFG%", f"{eff.get('efg_pct', 0):.1%}")
+            eff_cols[2].metric("Usage Rate", f"{eff.get('usage_rate', 0):.1f}%")
+            eff_cols[3].metric("Efficiency Tier", eff.get("efficiency_tier", "N/A"))
+
+            epm = eff.get("estimated_epm", {})
+            raptor = eff.get("estimated_raptor", {})
+            if epm or raptor:
+                adv_cols = st.columns([1, 1, 1, 1])
+                if epm:
+                    adv_cols[0].metric("EPM Total", f"{epm.get('total', 0):+.1f}")
+                    adv_cols[1].metric("EPM Percentile", f"{epm.get('percentile', 50):.0f}th")
+                if raptor:
+                    adv_cols[2].metric("RAPTOR Total", f"{raptor.get('raptor_total', 0):+.1f}")
+                    adv_cols[3].metric("Est. WAR", f"{raptor.get('war', 0):.1f}")
+
+    # ══════════════════════════════════════════════════════════════
+    # TAB 2: Predictions & Analysis
+    # ══════════════════════════════════════════════════════════════
+    with tab_pred:
+        # TL;DR
+        if tldr:
+            st.info(f"**TL;DR:** {tldr}")
+
+        # Simulation
+        st.subheader("🎲 Simulation Results")
+        sim_cols = st.columns([1, 1, 1, 1])
+        sim_cols[0].metric("Simulated Mean", f"{sim.get('simulated_mean', 0):.1f}")
+        sim_cols[1].metric("P(Over)", f"{sim.get('probability_over', 0):.1%}")
+        sim_cols[2].metric(
+            "90% CI",
+            f"{sim.get('ci_90_low', 0):.1f} – {sim.get('ci_90_high', 0):.1f}",
+        )
+        sim_cols[3].metric("Sims Run", sim.get("simulations_run", 0))
+
+        sim_detail_cols = st.columns([1, 1, 1])
+        sim_detail_cols[0].metric("10th %ile", f"{sim.get('percentile_10', 0):.1f}")
+        sim_detail_cols[1].metric("50th %ile", f"{sim.get('percentile_50', 0):.1f}")
+        sim_detail_cols[2].metric("90th %ile", f"{sim.get('percentile_90', 0):.1f}")
+
+        st.divider()
+
+        # Directional Forces
+        st.subheader("⚡ Directional Forces")
+        over_forces = forces.get("over_forces", [])
+        under_forces = forces.get("under_forces", [])
+
+        force_c1, force_c2 = st.columns(2)
+        with force_c1:
+            st.markdown("**🟢 OVER Forces**")
+            if over_forces:
+                for f in over_forces:
+                    name = f.get("name", f.get("force_name", "Unknown"))
+                    strength = f.get("strength", f.get("magnitude", 0))
+                    st.text(f"  ↑ {name}: {strength:.2f}")
+            else:
+                st.caption("No OVER forces detected.")
+
+        with force_c2:
+            st.markdown("**🔴 UNDER Forces**")
+            if under_forces:
+                for f in under_forces:
+                    name = f.get("name", f.get("force_name", "Unknown"))
+                    strength = f.get("strength", f.get("magnitude", 0))
+                    st.text(f"  ↓ {name}: {strength:.2f}")
+            else:
+                st.caption("No UNDER forces detected.")
+
+        # Game Script
+        game_script = result.get("game_script", {})
+        if game_script and "error" not in game_script:
+            st.divider()
+            st.subheader("🎬 Game Script Simulation")
+            gs_cols = st.columns([1, 1, 1, 1])
+            gs_cols[0].metric(
+                "Blended Mean",
+                f"{game_script.get('blended_mean', 0):.1f}",
+                delta=f"Script: {game_script.get('game_script_mean', 0):.1f}",
+            )
+            gs_cols[1].metric("Flat Mean", f"{game_script.get('flat_mean', 0):.1f}")
+            gs_cols[2].metric("Blowout Rate", f"{game_script.get('blowout_game_rate', 0):.1%}")
+            gs_cols[3].metric("Player Tier", game_script.get("player_tier", "rotation").title())
+            st.caption(
+                f"Blend: {game_script.get('blend_weight', 0.3):.0%} game-script "
+                f"+ {1 - game_script.get('blend_weight', 0.3):.0%} flat simulation."
+            )
+
+        # Distribution Cross-Check
+        dist_check = result.get("distribution_check", {})
+        if dist_check and "error" not in dist_check:
+            st.divider()
+            st.subheader("📐 Distribution Cross-Check")
             dc_cols = st.columns([1, 1, 1])
             dc_cols[0].metric(
                 "Analytical P(Over)",
@@ -1688,79 +1721,92 @@ def _page_prop_analyzer() -> None:
                     "This may indicate unusual stat distribution or high variance."
                 )
 
-    # Player Efficiency Profile
-    eff = result.get("efficiency", {})
-    if eff and "error" not in eff:
-        with st.expander("📈 Player Efficiency Profile", expanded=False):
-            eff_cols = st.columns([1, 1, 1, 1])
-            eff_cols[0].metric("True Shooting", f"{eff.get('ts_pct', 0):.1%}")
-            eff_cols[1].metric("eFG%", f"{eff.get('efg_pct', 0):.1%}")
-            eff_cols[2].metric("Usage Rate", f"{eff.get('usage_rate', 0):.1f}%")
-            eff_cols[3].metric("Efficiency Tier", eff.get("efficiency_tier", "N/A"))
+        # Full Explanation
+        with st.expander("📝 Full Explanation", expanded=False):
+            for key in [
+                "average_vs_line", "matchup_explanation", "pace_explanation",
+                "home_away_explanation", "rest_explanation", "vegas_explanation",
+                "projection_explanation", "simulation_narrative", "forces_summary",
+                "recent_form_explanation", "verdict",
+            ]:
+                text = explanation.get(key)
+                if text:
+                    st.markdown(f"**{key.replace('_', ' ').title()}:** {text}")
 
-            epm = eff.get("estimated_epm", {})
-            raptor = eff.get("estimated_raptor", {})
-            if epm or raptor:
-                adv_cols = st.columns([1, 1, 1, 1])
-                if epm:
-                    adv_cols[0].metric("EPM Total", f"{epm.get('total', 0):+.1f}")
-                    adv_cols[1].metric("EPM Percentile", f"{epm.get('percentile', 50):.0f}th")
-                if raptor:
-                    adv_cols[2].metric("RAPTOR Total", f"{raptor.get('raptor_total', 0):+.1f}")
-                    adv_cols[3].metric("Est. WAR", f"{raptor.get('war', 0):.1f}")
+    # ══════════════════════════════════════════════════════════════
+    # TAB 3: Bet Sizing & Verdict
+    # ══════════════════════════════════════════════════════════════
+    with tab_bet:
+        # Joseph M Smith's verdict (prominent in this tab)
+        if verdict_text:
+            st.markdown(get_verdict_banner_html(verdict_text), unsafe_allow_html=True)
 
-    st.divider()
+        st.subheader("💰 Bankroll & Sizing")
+        bet_cols = st.columns([1, 1, 1, 1])
+        bet_cols[0].metric(
+            "Kelly Sizing",
+            bankroll.get("recommended_pct", "0.00%"),
+            delta=bankroll.get("kelly_mode", "quarter").title(),
+        )
+        regime_label = f"{'⚠️ ' if regime_changed else '✅ '}{regime_dir.title()}"
+        bet_cols[1].metric(
+            "Regime",
+            regime_label,
+            delta=f"Magnitude: {regime.get('magnitude', 0.0):.1f}" if regime_changed else "Stable",
+            delta_color="off" if not regime_changed else ("normal" if regime_dir == "up" else "inverse"),
+        )
+        bet_cols[2].metric(
+            "Payout",
+            f"{bankroll.get('payout_multiplier', 1.909):.3f}x",
+        )
+        if kelly_frac > 0:
+            example_bet = round(kelly_frac * EXAMPLE_BANKROLL, 2)
+            bet_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", f"${example_bet:.2f}")
+        else:
+            bet_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", "No bet")
 
-    # ── Detailed Explanation ────────────────────────────────────────
-    with st.expander("📝 Full Explanation", expanded=False):
-        for key in [
-            "average_vs_line", "matchup_explanation", "pace_explanation",
-            "home_away_explanation", "rest_explanation", "vegas_explanation",
-            "projection_explanation", "simulation_narrative", "forces_summary",
-            "recent_form_explanation", "verdict",
-        ]:
-            text = explanation.get(key)
-            if text:
-                st.markdown(f"**{key.replace('_', ' ').title()}:** {text}")
-
-    # ── Risk factors ────────────────────────────────────────────────
-    risk_factors = explanation.get("risk_factors", [])
-    if risk_factors:
-        with st.expander("⚠️ Risk Factors"):
+        # Risk factors
+        risk_factors = explanation.get("risk_factors", [])
+        if risk_factors:
+            st.divider()
+            st.subheader("⚠️ Risk Factors")
             for rf in risk_factors:
                 st.warning(rf)
 
-    avoid_reasons = conf.get("avoid_reasons", [])
-    if avoid_reasons:
-        st.error("**Avoid Reasons:** " + " • ".join(avoid_reasons))
+        avoid_reasons = conf.get("avoid_reasons", [])
+        if avoid_reasons:
+            st.error("**Avoid Reasons:** " + " • ".join(avoid_reasons))
 
-    # ── Save Pick button ────────────────────────────────────────────
-    st.divider()
-    if st.button("💾 Save Pick", key="save_pick_btn", use_container_width=True):
-        save_data = {
-            "player_id": int(player_id),
-            "player_name": player_name,
-            "team": result.get("team", ""),
-            "opponent": result.get("opponent", ""),
-            "stat_type": stat_type,
-            "prop_line": float(prop_line),
-            "direction": direction,
-            "model_probability": model_prob,
-            "edge_pct": edge,
-            "confidence_score": score,
-            "tier": tier,
-            "kelly_fraction": kelly_frac,
-            "recommended_bet": round(kelly_frac * EXAMPLE_BANKROLL, 2),
-            "regime_flag": regime_dir,
-            "platform": platform,
-            "vegas_spread": float(vegas_spread),
-            "game_total": float(game_total),
-        }
-        save_result = save_pick(save_data)
-        if save_result.get("status") == "saved":
-            st.success(f"✅ Pick saved (ID: {save_result.get('pick_id')})")
-        else:
-            st.error(f"Failed to save: {save_result.get('message', 'Unknown error')}")
+        # Save Pick button
+        st.divider()
+        if st.button("💾 Save Pick", key="save_pick_btn", use_container_width=True):
+            save_data = {
+                "player_id": int(player_id),
+                "player_name": player_name,
+                "team": result.get("team", ""),
+                "opponent": result.get("opponent", ""),
+                "stat_type": stat_type,
+                "prop_line": float(prop_line),
+                "direction": direction,
+                "model_probability": model_prob,
+                "edge_pct": edge,
+                "confidence_score": score,
+                "tier": tier,
+                "kelly_fraction": kelly_frac,
+                "recommended_bet": round(kelly_frac * EXAMPLE_BANKROLL, 2),
+                "regime_flag": regime_dir,
+                "platform": platform,
+                "vegas_spread": float(vegas_spread),
+                "game_total": float(game_total),
+            }
+            save_result = save_pick(save_data)
+            if save_result.get("status") == "saved":
+                st.success(f"✅ Pick saved (ID: {save_result.get('pick_id')})")
+            else:
+                st.error(f"Failed to save: {save_result.get('message', 'Unknown error')}")
+
+    # Close the card divs
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

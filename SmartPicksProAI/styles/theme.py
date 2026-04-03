@@ -354,6 +354,99 @@ hr { border-color: rgba(0,240,255,0.08) !important; }
     text-shadow: 0 0 8px rgba(0,240,255,0.5);
     margin-top: 12px;
 }
+
+/* ── Player Result Card ──────────────────────────────────── */
+.player-result-card {
+    background: rgba(15,23,42,0.55);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(0,240,255,0.12);
+    border-radius: 16px;
+    padding: 0;
+    margin-bottom: 24px;
+    box-shadow: 0 0 30px rgba(0,240,255,0.05), 0 8px 32px rgba(0,0,0,0.35);
+    overflow: hidden;
+    position: relative;
+}
+.player-result-card::before {
+    content: ''; position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, #00f0ff, #00ff9d, #FFD700, #c800ff, #00f0ff);
+    background-size: 200% 100%;
+    animation: headerShimmer 4s ease infinite;
+}
+.player-card-header {
+    display: flex; align-items: center; gap: 20px;
+    padding: 24px 28px 16px 28px;
+    border-bottom: 1px solid rgba(0,240,255,0.08);
+}
+.player-card-name {
+    font-size: clamp(1.1rem, 2vw, 1.5rem);
+    font-weight: 800;
+    font-family: 'Orbitron', sans-serif;
+    background: linear-gradient(135deg, #00f0ff, #00ff9d);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin: 0; line-height: 1.3;
+}
+.player-card-meta {
+    font-size: 0.82rem; color: #94A3B8;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.03em; margin-top: 4px;
+}
+.player-card-tier {
+    margin-left: auto; text-align: right;
+}
+.player-card-body { padding: 0 28px 24px 28px; }
+
+/* ── Verdict Banner ──────────────────────────────────────── */
+.verdict-banner {
+    display: flex; align-items: center; gap: 16px;
+    background: linear-gradient(135deg, rgba(0,240,255,0.06), rgba(0,255,157,0.04));
+    border: 1px solid rgba(0,240,255,0.15);
+    border-radius: 12px; padding: 16px 20px;
+    margin: 16px 0; position: relative; overflow: hidden;
+}
+.verdict-banner::before {
+    content: ''; position: absolute;
+    top: 0; left: 0; bottom: 0; width: 3px;
+    background: linear-gradient(180deg, #00f0ff, #00ff9d);
+}
+.verdict-avatar {
+    width: 48px; height: 48px; border-radius: 50%;
+    border: 2px solid rgba(0,240,255,0.35);
+    box-shadow: 0 0 12px rgba(0,240,255,0.15);
+    flex-shrink: 0;
+}
+.verdict-text {
+    flex: 1; min-width: 0;
+}
+.verdict-label {
+    font-size: 0.68rem; font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    color: #00f0ff; text-transform: uppercase;
+    letter-spacing: 0.12em; margin-bottom: 4px;
+}
+.verdict-content {
+    font-size: 0.92rem; color: #e0eeff;
+    font-family: 'Inter', sans-serif;
+    line-height: 1.5;
+}
+.verdict-content strong {
+    color: #00f0ff;
+}
+
+/* ── Quick Stat Pill ─────────────────────────────────────── */
+.stat-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(15,23,42,0.70); border: 1px solid rgba(0,240,255,0.10);
+    border-radius: 8px; padding: 6px 14px;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
+    color: #c8d8f0;
+}
+.stat-pill-label { color: #94A3B8; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.stat-pill-value { color: #00f0ff; font-weight: 700; }
+.stat-pill-green .stat-pill-value { color: #00ff9d; }
+.stat-pill-red .stat-pill-value { color: #ff4444; }
+.stat-pill-gold .stat-pill-value { color: #FFD700; }
 </style>
 """
 
@@ -471,3 +564,28 @@ def get_logo_html(max_width: int = 200) -> str:
     if not b64:
         return ""
     return f'<img src="data:image/png;base64,{b64}" style="max-width:{max_width}px;" alt="Smart Pick Pro">'
+
+
+def get_verdict_banner_html(verdict_text: str) -> str:
+    """Return Joseph M Smith verdict banner HTML for player analysis cards."""
+    avatar_b64 = _load_image_b64("Joseph_M_Smith_Avatar.png")
+    avatar_html = ""
+    if avatar_b64:
+        avatar_html = (
+            f'<img src="data:image/png;base64,{avatar_b64}" '
+            f'class="verdict-avatar" alt="Joseph M Smith">'
+        )
+    else:
+        avatar_html = (
+            '<div class="verdict-avatar" style="background:rgba(0,240,255,0.15);'
+            'display:flex;align-items:center;justify-content:center;font-size:1.3rem;">'
+            '🧠</div>'
+        )
+    return f"""
+    <div class="verdict-banner">
+        {avatar_html}
+        <div class="verdict-text">
+            <div class="verdict-label">Joseph M Smith's Verdict</div>
+            <div class="verdict-content">{verdict_text}</div>
+        </div>
+    </div>"""
