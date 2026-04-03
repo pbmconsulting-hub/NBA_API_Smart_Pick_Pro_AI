@@ -235,7 +235,7 @@ def fetch_team_season_logs(season: str = SEASON) -> pd.DataFrame:
         DataFrame of raw team-level game logs.
     """
     logger.info("Fetching team game logs for season %s …", season)
-    time.sleep(2)  # Respect NBA API rate limits.
+    _rate_limited_sleep()
     df = _call_with_retries(
         lambda: LeagueGameLog(
             player_or_team_abbreviation="T",
@@ -778,44 +778,50 @@ def fetch_and_load_rosters(
     all_roster_rows: list[dict] = []
     position_updates: list[tuple] = []
 
-    for tid in team_ids:
+    def _fetch_roster(tid: int) -> tuple[int, pd.DataFrame | None]:
+        """Fetch a single team's roster with rate limiting."""
         try:
-            time.sleep(2)  # Respect NBA API rate limits.
+            _rate_limited_sleep()
             df = _call_with_retries(
                 lambda tid=tid: CommonTeamRoster(
                     team_id=tid, season=season,
                 ).get_data_frames()[0],
                 description=f"CommonTeamRoster(team={tid})",
             )
+            return tid, df
         except Exception:
             logger.warning(
                 "Failed to fetch roster for team %d after %d attempts — skipping.",
                 tid, _MAX_RETRIES,
             )
-            continue
+            return tid, None
 
-        if df.empty:
-            continue
-
-        for _, row in df.iterrows():
-            pid = row.get("PLAYER_ID")
-            raw_pos = row.get("POSITION", None)
-            height_str = row.get("HEIGHT", None)
-            if pid is None:
+    with ThreadPoolExecutor(max_workers=_PLAYER_WORKERS) as executor:
+        futures = {executor.submit(_fetch_roster, tid): tid for tid in team_ids}
+        for future in as_completed(futures):
+            tid, df = future.result()
+            if df is None or df.empty:
                 continue
-            all_roster_rows.append({
-                "team_id": tid,
-                "player_id": int(pid),
-                "effective_start_date": season,
-                "effective_end_date": None,
-                "is_two_way": 0,
-                "is_g_league": 0,
-            })
-            if raw_pos:
-                h_in = _parse_height_inches(height_str)
-                mapped = _map_to_five_position(raw_pos, h_in)
-                if mapped:
-                    position_updates.append((mapped, int(pid)))
+
+            for _, row in df.iterrows():
+                pid = row.get("PLAYER_ID")
+                raw_pos = row.get("POSITION", None)
+                height_str = row.get("HEIGHT", None)
+                if pid is None:
+                    continue
+                all_roster_rows.append({
+                    "team_id": tid,
+                    "player_id": int(pid),
+                    "effective_start_date": season,
+                    "effective_end_date": None,
+                    "is_two_way": 0,
+                    "is_g_league": 0,
+                })
+                if raw_pos:
+                    h_in = _parse_height_inches(height_str)
+                    mapped = _map_to_five_position(raw_pos, h_in)
+                    if mapped:
+                        position_updates.append((mapped, int(pid)))
 
     # Load Team_Roster rows.
     if all_roster_rows:
@@ -1031,7 +1037,7 @@ def populate_player_clutch_stats(
     """
     logger.info("Fetching player clutch stats for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueDashPlayerClutch(
                 season=season, season_type_all_star="Regular Season",
@@ -1079,7 +1085,7 @@ def populate_team_clutch_stats(
     """
     logger.info("Fetching team clutch stats for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueDashTeamClutch(
                 season=season, season_type_all_star="Regular Season",
@@ -1127,7 +1133,7 @@ def populate_player_hustle_stats(
     """
     logger.info("Fetching player hustle stats for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueHustleStatsPlayer(
                 season=season, season_type_all_star="Regular Season",
@@ -1186,7 +1192,7 @@ def populate_team_hustle_stats(
     """
     logger.info("Fetching team hustle stats for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueHustleStatsTeam(
                 season=season, season_type_all_star="Regular Season",
@@ -1241,7 +1247,7 @@ def populate_player_bio(
     """
     logger.info("Fetching player bio stats for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueDashPlayerBioStats(
                 season=season, season_type_all_star="Regular Season",
@@ -1291,7 +1297,7 @@ def populate_player_estimated_metrics(
     """
     logger.info("Fetching player estimated metrics for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: PlayerEstimatedMetrics(
                 season=season, season_type="Regular Season",
@@ -1337,7 +1343,7 @@ def populate_team_estimated_metrics(
     """
     logger.info("Fetching team estimated metrics for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: TeamEstimatedMetrics(
                 season=season, season_type="Regular Season",
@@ -1383,7 +1389,7 @@ def populate_league_dash_player_stats(
     """
     logger.info("Fetching league dash player stats for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueDashPlayerStats(
                 season=season, season_type_all_star="Regular Season",
@@ -1433,7 +1439,7 @@ def populate_league_dash_team_stats(
     """
     logger.info("Fetching league dash team stats for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueDashTeamStats(
                 season=season, season_type_all_star="Regular Season",
@@ -1481,7 +1487,7 @@ def populate_league_leaders(
     """
     logger.info("Fetching league leaders for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueLeaders(
                 season=season, season_type_all_star="Regular Season",
@@ -1529,7 +1535,7 @@ def populate_standings(
     """
     logger.info("Fetching standings for season %s …", season)
     try:
-        time.sleep(2)
+        _rate_limited_sleep()
         df = _call_with_retries(
             lambda: LeagueStandingsV3(
                 season=season, season_type="Regular Season",
