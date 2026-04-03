@@ -21,7 +21,9 @@ import logging
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 import pandas as pd
 from nba_api.stats.endpoints import (
@@ -49,6 +51,7 @@ from nba_api.stats.endpoints import (
 from nba_api.stats.static import teams as static_teams
 
 import setup_db
+from utils import parse_matchup_abbreviations
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,7 +148,11 @@ def _rate_limited_sleep() -> None:
         _last_call_time = time.monotonic()
 
 
-def _call_with_retries(api_callable, description="API call", max_retries=_MAX_RETRIES):
+def _call_with_retries(
+    api_callable: Callable[[], Any],
+    description: str = "API call",
+    max_retries: int = _MAX_RETRIES,
+) -> Any:
     """Call *api_callable* up to *max_retries* times with exponential backoff.
 
     If all attempts fail, the last exception is re-raised so the caller can
@@ -331,18 +338,8 @@ def build_games_df(raw: pd.DataFrame) -> pd.DataFrame:
 
     games["season"] = SEASON
 
-    def _parse_abbrevs(matchup: str):
-        if " vs. " in matchup:
-            parts = matchup.split(" vs. ", 1)
-            return parts[0].strip(), parts[1].strip()
-        if " @ " in matchup:
-            parts = matchup.split(" @ ", 1)
-            # left team is away, right team is home
-            return parts[1].strip(), parts[0].strip()
-        return None, None
-
     home_abbrevs, away_abbrevs = zip(
-        *games["matchup"].map(_parse_abbrevs)
+        *games["matchup"].map(parse_matchup_abbreviations)
     ) if not games.empty else ([], [])
     games["home_abbrev"] = list(home_abbrevs)
     games["away_abbrev"] = list(away_abbrevs)

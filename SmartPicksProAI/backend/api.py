@@ -41,6 +41,15 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = setup_db.DB_PATH
 
+# ---------------------------------------------------------------------------
+# Endpoint defaults — centralised to avoid scattered magic numbers
+# ---------------------------------------------------------------------------
+
+MAX_SEARCH_RESULTS = 25
+LAST_N_GAMES_DEFAULT = 5
+MAX_SEASON_GAMES = 82
+TEAM_STATS_DEFAULT_LIMIT = 10
+
 app = FastAPI(
     title="SmartPicksProAI API",
     description="NBA player stats and game data for ML-powered prop predictions.",
@@ -375,7 +384,7 @@ def search_players(q: str = "") -> dict:
 
     Performs a case-insensitive ``LIKE`` search against ``full_name``,
     ``first_name``, and ``last_name`` in the Players table.  Returns up to
-    25 matching players with basic info (id, name, team, position).
+    :data:`MAX_SEARCH_RESULTS` matching players with basic info.
 
     Args:
         q: Search query string (e.g. ``'LeBron'``).
@@ -390,28 +399,22 @@ def search_players(q: str = "") -> dict:
     if not q.strip():
         return {"results": []}
 
-    conn = _get_conn()
-    try:
-        pattern = f"%{q.strip()}%"
-        rows = conn.execute(
-            """
-            SELECT player_id, first_name, last_name, full_name,
-                   team_id, team_abbreviation, position
-            FROM Players
-            WHERE full_name LIKE ?
-               OR first_name LIKE ?
-               OR last_name LIKE ?
-            ORDER BY full_name
-            LIMIT 25
-            """,
-            (pattern, pattern, pattern),
-        ).fetchall()
-        return {"results": [dict(r) for r in rows]}
-    except Exception as exc:
-        logger.exception("Error searching players for q=%s.", q)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        conn.close()
+    pattern = f"%{q.strip()}%"
+    rows = _query_rows(
+        """
+        SELECT player_id, first_name, last_name, full_name,
+               team_id, team_abbreviation, position
+        FROM Players
+        WHERE full_name LIKE ?
+           OR first_name LIKE ?
+           OR last_name LIKE ?
+        ORDER BY full_name
+        LIMIT ?
+        """,
+        (pattern, pattern, pattern, MAX_SEARCH_RESULTS),
+        label="search_players",
+    )
+    return {"results": rows}
 
 
 @app.get("/api/teams")

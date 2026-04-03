@@ -19,7 +19,7 @@ Start the dashboard::
 import pandas as pd
 import streamlit as st
 
-from typing import Optional
+from typing import Any
 
 from api_service import (
     get_defense_vs_position,
@@ -60,8 +60,12 @@ from api_service import (
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Page configuration
+# Page configuration & constants
 # ═══════════════════════════════════════════════════════════════════════════
+
+MAX_GAME_COLUMNS = 4
+MAX_RECENT_GAMES = 20
+MAX_SEARCH_RESULTS = 10
 
 st.set_page_config(
     page_title="SmartPicksProAI",
@@ -74,16 +78,16 @@ st.set_page_config(
 # Session-state navigation
 # ═══════════════════════════════════════════════════════════════════════════
 
-if "page" not in st.session_state:
-    st.session_state.page = "home"
-if "selected_game_id" not in st.session_state:
-    st.session_state.selected_game_id = None
-if "selected_player_id" not in st.session_state:
-    st.session_state.selected_player_id = None
-if "selected_team_id" not in st.session_state:
-    st.session_state.selected_team_id = None
-if "game_context" not in st.session_state:
-    st.session_state.game_context = {}
+_DEFAULT_STATE: dict[str, Any] = {
+    "page": "home",
+    "selected_game_id": None,
+    "selected_player_id": None,
+    "selected_team_id": None,
+    "game_context": {},
+}
+for _key, _default in _DEFAULT_STATE.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _default
 
 
 def _nav(page: str, **kwargs) -> None:
@@ -368,7 +372,11 @@ st.markdown(
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _show_df(data, columns=None, height=None):
+def _show_df(
+    data: list[dict[str, Any]] | pd.DataFrame,
+    columns: list[str] | None = None,
+    height: int | None = None,
+) -> None:
     """Display data as a styled dataframe."""
     if not data:
         st.markdown('<div class="empty-state">No data available.</div>',
@@ -385,7 +393,13 @@ def _show_df(data, columns=None, height=None):
     st.dataframe(df, **kwargs)
 
 
-def _player_button(player_id, name, position=None, team=None, key_prefix=""):
+def _player_button(
+    player_id: int,
+    name: str,
+    position: str | None = None,
+    team: str | None = None,
+    key_prefix: str = "",
+) -> None:
     """Render a clickable button for a player that navigates to their profile."""
     label_parts = [name]
     if position:
@@ -399,7 +413,7 @@ def _player_button(player_id, name, position=None, team=None, key_prefix=""):
         st.rerun()
 
 
-def _game_button(game, key_prefix=""):
+def _game_button(game: dict[str, Any], key_prefix: str = "") -> None:
     """Render a clickable game card button."""
     matchup = game.get("matchup", "TBD")
     home_score = game.get("home_score")
@@ -546,7 +560,7 @@ if current_page == "home":
 
     games = get_todays_games()
     if games:
-        cols = st.columns(min(len(games), 4))
+        cols = st.columns(min(len(games), MAX_GAME_COLUMNS))
         for idx, game in enumerate(games):
             with cols[idx % len(cols)]:
                 _game_button(game, key_prefix="today")
@@ -562,7 +576,7 @@ if current_page == "home":
     recent = get_recent_games()
     if recent:
         # Show as clickable list
-        for idx, game in enumerate(recent[:20]):
+        for idx, game in enumerate(recent[:MAX_RECENT_GAMES]):
             _game_button(game, key_prefix="recent")
     else:
         st.info("No recent game data available.")
@@ -591,7 +605,7 @@ if current_page == "home":
     if player_query.strip():
         results = search_players(player_query.strip())
         if results:
-            for r in results[:10]:
+            for r in results[:MAX_SEARCH_RESULTS]:
                 _player_button(
                     r["player_id"],
                     r.get("full_name", ""),

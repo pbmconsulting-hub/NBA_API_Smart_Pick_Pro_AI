@@ -28,6 +28,7 @@ from nba_api.stats.endpoints import LeagueGameLog, ScoreboardV3
 
 import initial_pull
 import setup_db
+from utils import parse_matchup_abbreviations
 
 logging.basicConfig(
     level=logging.INFO,
@@ -171,17 +172,8 @@ def _upsert_games(raw: pd.DataFrame, conn: sqlite3.Connection) -> None:
 
     games["season"] = SEASON
 
-    def _parse_abbrevs(matchup: str):
-        if " vs. " in matchup:
-            parts = matchup.split(" vs. ", 1)
-            return parts[0].strip(), parts[1].strip()
-        if " @ " in matchup:
-            parts = matchup.split(" @ ", 1)
-            return parts[1].strip(), parts[0].strip()
-        return None, None
-
     if not games.empty:
-        home_abbrevs, away_abbrevs = zip(*games["matchup"].map(_parse_abbrevs))
+        home_abbrevs, away_abbrevs = zip(*games["matchup"].map(parse_matchup_abbreviations))
         games["home_abbrev"] = list(home_abbrevs)
         games["away_abbrev"] = list(away_abbrevs)
         # Normalise matchup to always use "{HOME} vs. {AWAY}" format.

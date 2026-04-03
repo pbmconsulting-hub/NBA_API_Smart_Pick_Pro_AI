@@ -1344,9 +1344,12 @@ def create_tables(db_path: str = DB_PATH) -> None:
                      + _NEW_TABLE_ALTER):
             try:
                 cursor.execute(stmt)
-            except sqlite3.OperationalError:
-                # Column already exists — safe to ignore.
-                pass
+            except sqlite3.OperationalError as exc:
+                error_msg = str(exc).lower()
+                if "duplicate" in error_msg or "already exists" in error_msg:
+                    pass  # Column already exists — safe to ignore.
+                else:
+                    logger.warning("Unexpected ALTER TABLE error: %s", exc)
 
         # ==================================================================
         # SQL Views for AI convenience
@@ -1355,8 +1358,11 @@ def create_tables(db_path: str = DB_PATH) -> None:
         for view_name, view_sql in _VIEWS.items():
             try:
                 cursor.execute(view_sql)
-            except sqlite3.OperationalError:
-                logger.debug("View %s already exists or failed.", view_name)
+            except sqlite3.OperationalError as exc:
+                if "already exists" in str(exc).lower():
+                    logger.debug("View %s already exists.", view_name)
+                else:
+                    logger.warning("Failed to create view %s: %s", view_name, exc)
 
         conn.commit()
         logger.info("All tables, indexes, and views created successfully.")
