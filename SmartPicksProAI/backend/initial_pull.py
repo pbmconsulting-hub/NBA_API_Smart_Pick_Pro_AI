@@ -62,6 +62,12 @@ logger = logging.getLogger(__name__)
 DB_PATH = setup_db.DB_PATH
 SEASON = "2025-26"
 
+# When True, skip all data-pull sections that come after Player_Career_Stats.
+# This includes shot-chart fetches and per-game box-score loops (advanced,
+# scoring, usage, tracking, matchups).
+# Set to False when the app is upgraded to use this data.
+SKIP_EXTENDED_PULLS = True
+
 # Mapping from NBA API column names to Player_Game_Logs DB column names.
 STAT_COLS_MAP = {
     "PLAYER_ID": "player_id",
@@ -2015,13 +2021,20 @@ def run_initial_pull(db_path: str = DB_PATH, season: str = SEASON) -> None:
         logger.info("--- Populating per-player tables ---")
         populate_player_career_stats(conn, season)
         conn.commit()
-        populate_shot_chart(conn, season)
-        conn.commit()
 
-        # --- Per-game advanced box scores ---
-        logger.info("--- Populating per-game advanced box scores ---")
-        populate_game_advanced_box_scores(conn, season)
-        conn.commit()
+        if SKIP_EXTENDED_PULLS:
+            logger.info(
+                "SKIP_EXTENDED_PULLS is enabled — skipping shot chart, "
+                "per-game box scores, and remaining extended data pulls."
+            )
+        else:
+            populate_shot_chart(conn, season)
+            conn.commit()
+
+            # --- Per-game advanced box scores ---
+            logger.info("--- Populating per-game advanced box scores ---")
+            populate_game_advanced_box_scores(conn, season)
+            conn.commit()
 
         logger.info("=== Initial pull complete. Database is ready. ===")
     finally:
