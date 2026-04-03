@@ -108,7 +108,7 @@ def _get(
         resp.raise_for_status()
         data = resp.json()
         return data if key is None else data.get(key, default)
-    except Exception as exc:
+    except (requests.RequestException, ValueError) as exc:
         logger.error("GET %s failed: %s", path, exc)
         return default
 
@@ -345,6 +345,6 @@ def trigger_refresh() -> dict:
         resp = requests.post(f"{BASE_URL}/api/admin/refresh-data", timeout=REFRESH_REQUEST_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
-    except Exception as exc:
+    except (requests.RequestException, ValueError) as exc:
         logger.error("Failed to trigger refresh: %s", exc)
         return {"status": "error", "message": str(exc)}

@@ -112,7 +112,7 @@ def _query_rows(sql: str, params: tuple = (), *, label: str = "query") -> list[d
         with _db() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.exception("Error in %s.", label)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -135,7 +135,7 @@ def _query_one(sql: str, params: tuple = (), *, label: str = "query") -> dict | 
         with _db() as conn:
             row = conn.execute(sql, params).fetchone()
         return dict(row) if row else None
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.exception("Error in %s.", label)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -181,6 +181,38 @@ def health_check() -> dict:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+# Stat columns used for computing per-player averages.
+_PLAYER_STAT_KEYS: list[str] = [
+    "pts", "reb", "ast", "blk", "stl", "tov",
+    "fgm", "fga", "fg_pct",
+    "fg3m", "fg3a", "fg3_pct",
+    "ftm", "fta", "ft_pct",
+    "oreb", "dreb", "pf", "plus_minus",
+]
+
+
+def _compute_stat_averages(
+    games: list[dict], stat_keys: list[str] = _PLAYER_STAT_KEYS,
+) -> dict[str, float]:
+    """Return the mean of each *stat_key* across *games*.
+
+    Missing/None values are treated as 0.  Returns all-zeros when the
+    input list is empty.
+
+    Args:
+        games: List of game-log dicts (each containing the stat keys).
+        stat_keys: Stat column names to average.
+
+    Returns:
+        Dict mapping each stat key to its rounded average.
+    """
+    if not games:
+        return {k: 0.0 for k in stat_keys}
+    return {
+        k: round(sum(g.get(k) or 0 for g in games) / len(games), 1)
+        for k in stat_keys
+    }
 
 
 @app.get("/api/players/{player_id}/last5")
@@ -259,31 +291,16 @@ def get_player_last5(player_id: int) -> dict:
 
         games = [dict(row) for row in rows]
 
-        stat_keys = [
-            "pts", "reb", "ast", "blk", "stl", "tov",
-            "fgm", "fga", "fg_pct",
-            "fg3m", "fg3a", "fg3_pct",
-            "ftm", "fta", "ft_pct",
-            "oreb", "dreb", "pf", "plus_minus",
-        ]
-        if games:
-            averages = {
-                k: round(sum(g[k] or 0 for g in games) / len(games), 1)
-                for k in stat_keys
-            }
-        else:
-            averages = {k: 0.0 for k in stat_keys}
-
         return {
             "player_id": player_row["player_id"],
             "first_name": player_row["first_name"],
             "last_name": player_row["last_name"],
             "games": games,
-            "averages": averages,
+            "averages": _compute_stat_averages(games),
         }
     except HTTPException:
         raise
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.exception("Error fetching last-5 for player %d.", player_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:

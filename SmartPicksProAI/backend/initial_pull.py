@@ -131,6 +131,8 @@ _RATE_LIMIT_DELAY = 0.6              # Seconds between API calls (rate-limit).
 _PLAYER_WORKERS = 3                  # Concurrent threads for per-player fetches.
 _GAME_WORKERS = 3                    # Concurrent threads for per-game fetches.
 _BOX_SCORE_TYPE_WORKERS = 5          # Concurrent threads for box-score types within one game.
+_MAX_BACKOFF_DELAY = 30              # Cap on exponential back-off delay (seconds).
+_LOG_PROGRESS_INTERVAL = 50          # Log a progress line every N items.
 
 # Thread-safe rate limiter to avoid triggering 429 / throttling.
 _rate_lock = threading.Lock()
@@ -177,7 +179,7 @@ def _call_with_retries(
         except Exception as exc:
             last_exc = exc
             if attempt < max_retries:
-                delay = min(2 ** attempt, 30)  # exponential back-off: 2, 4, 8, 16, … capped at 30 s
+                delay = min(2 ** attempt, _MAX_BACKOFF_DELAY)
                 logger.warning(
                     "%s failed (attempt %d/%d): %s — retrying in %ds …",
                     description, attempt, max_retries, exc, delay,
@@ -1022,7 +1024,7 @@ def populate_defense_vs_position(
 
 def _populate_season_table(
     conn: sqlite3.Connection,
-    endpoint_factory,
+    endpoint_factory: Callable[[], Any],
     col_map: dict[str, str],
     table_name: str,
     season: str = SEASON,
@@ -1535,7 +1537,7 @@ def populate_player_career_stats(
             if mapped is not None:
                 all_rows.append(mapped)
             done += 1
-            if done % 50 == 0:
+            if done % _LOG_PROGRESS_INTERVAL == 0:
                 logger.info("  … career stats: %d / %d players processed.", done, len(player_ids))
 
     if not all_rows:
@@ -1631,7 +1633,7 @@ def populate_shot_chart(
             if mapped is not None:
                 all_rows.append(mapped)
             done += 1
-            if done % 50 == 0:
+            if done % _LOG_PROGRESS_INTERVAL == 0:
                 logger.info("  … shot chart: %d / %d players processed.", done, len(player_ids))
 
     if not all_rows:
@@ -1649,6 +1651,147 @@ def populate_shot_chart(
 # ---------------------------------------------------------------------------
 # Per-game advanced box score ETL pipelines
 # ---------------------------------------------------------------------------
+
+# Column mapping dicts for each box-score endpoint.  Extracted here as
+# module-level constants so ``_fetch_single_game_box_scores`` stays concise.
+
+_COL_MAP_ADVANCED: dict[str, str] = {
+    "gameId": "game_id", "personId": "person_id",
+    "teamId": "team_id", "position": "position",
+    "minutes": "minutes",
+    "estimatedOffensiveRating": "est_off_rating",
+    "offensiveRating": "off_rating",
+    "estimatedDefensiveRating": "est_def_rating",
+    "defensiveRating": "def_rating",
+    "estimatedNetRating": "est_net_rating",
+    "netRating": "net_rating",
+    "assistPercentage": "ast_pct",
+    "assistToTurnover": "ast_to_tov",
+    "assistRatio": "ast_ratio",
+    "offensiveReboundPercentage": "oreb_pct",
+    "defensiveReboundPercentage": "dreb_pct",
+    "reboundPercentage": "reb_pct",
+    "turnoverRatio": "tov_ratio",
+    "effectiveFieldGoalPercentage": "efg_pct",
+    "trueShootingPercentage": "ts_pct",
+    "usagePercentage": "usg_pct",
+    "estimatedUsagePercentage": "est_usg_pct",
+    "estimatedPace": "est_pace",
+    "pace": "pace", "pacePerGame": "pace_per40",
+    "possessions": "possessions", "PIE": "pie",
+}
+
+_COL_MAP_SCORING: dict[str, str] = {
+    "gameId": "game_id", "personId": "person_id",
+    "teamId": "team_id", "minutes": "minutes",
+    "percentageFieldGoalsAttempted2pt": "pct_fga_2pt",
+    "percentageFieldGoalsAttempted3pt": "pct_fga_3pt",
+    "percentagePoints2pt": "pct_pts_2pt",
+    "percentagePointsMidrange2pt": "pct_pts_mid2pt",
+    "percentagePoints3pt": "pct_pts_3pt",
+    "percentagePointsFastBreak": "pct_pts_fast_break",
+    "percentagePointsFreeThrow": "pct_pts_ft",
+    "percentagePointsOffTurnovers": "pct_pts_off_tov",
+    "percentagePointsPaint": "pct_pts_paint",
+    "percentageAssisted2pt": "pct_assisted_2pt",
+    "percentageUnassisted2pt": "pct_unassisted_2pt",
+    "percentageAssisted3pt": "pct_assisted_3pt",
+    "percentageUnassisted3pt": "pct_unassisted_3pt",
+    "percentageAssistedFGM": "pct_assisted_fgm",
+    "percentageUnassistedFGM": "pct_unassisted_fgm",
+}
+
+_COL_MAP_USAGE: dict[str, str] = {
+    "gameId": "game_id", "personId": "person_id",
+    "teamId": "team_id", "minutes": "minutes",
+    "usagePercentage": "usg_pct",
+    "percentageFieldGoalsMade": "pct_fgm",
+    "percentageFieldGoalsAttempted": "pct_fga",
+    "percentageThreePointersMade": "pct_fg3m",
+    "percentageThreePointersAttempted": "pct_fg3a",
+    "percentageFreeThrowsMade": "pct_ftm",
+    "percentageFreeThrowsAttempted": "pct_fta",
+    "percentageOffensiveRebounds": "pct_oreb",
+    "percentageDefensiveRebounds": "pct_dreb",
+    "percentageRebounds": "pct_reb",
+    "percentageAssists": "pct_ast",
+    "percentageTurnovers": "pct_tov",
+    "percentageSteals": "pct_stl",
+    "percentageBlocks": "pct_blk",
+    "percentageBlocksAllowed": "pct_blka",
+    "percentagePersonalFouls": "pct_pf",
+    "percentagePersonalFoulsDrawn": "pct_pfd",
+    "percentagePoints": "pct_pts",
+}
+
+_COL_MAP_TRACKING: dict[str, str] = {
+    "gameId": "game_id", "personId": "person_id",
+    "teamId": "team_id", "teamTricode": "team_tricode",
+    "firstName": "first_name", "familyName": "family_name",
+    "position": "position", "comment": "comment",
+    "jerseyNum": "jersey_num", "minutes": "minutes",
+    "speed": "speed", "distance": "distance",
+    "reboundChancesOffensive": "rebound_chances_offensive",
+    "reboundChancesDefensive": "rebound_chances_defensive",
+    "reboundChancesTotal": "rebound_chances_total",
+    "touches": "touches",
+    "secondaryAssists": "secondary_assists",
+    "freeThrowAssists": "free_throw_assists",
+    "passes": "passes", "assists": "assists",
+    "contestedFieldGoalsMade": "contested_fg_made",
+    "contestedFieldGoalsAttempted": "contested_fg_attempted",
+    "contestedFieldGoalPercentage": "contested_fg_pct",
+    "uncontestedFieldGoalsMade": "uncontested_fg_made",
+    "uncontestedFieldGoalsAttempted": "uncontested_fg_attempted",
+    "uncontestedFieldGoalPercentage": "uncontested_fg_pct",
+    "fieldGoalPercentage": "fg_pct",
+    "defendedAtRimFieldGoalsMade": "defended_at_rim_fg_made",
+    "defendedAtRimFieldGoalsAttempted": "defended_at_rim_fg_attempted",
+    "defendedAtRimFieldGoalPercentage": "defended_at_rim_fg_pct",
+}
+
+_COL_MAP_MATCHUPS: dict[str, str] = {
+    "gameId": "game_id",
+    "personIdOff": "person_id_off",
+    "personIdDef": "person_id_def",
+    "teamId": "team_id",
+    "matchupMinutes": "matchup_min",
+    "matchupMinutesSort": "matchup_min_sort",
+    "partialPossessions": "partial_poss",
+    "percentageDefenderTotalTime": "pct_def_total_time",
+    "percentageOffensiveTotalTime": "pct_off_total_time",
+    "percentageTotalTimeBothOn": "pct_total_time_both_on",
+    "switchesOn": "switches_on",
+    "playerPoints": "player_pts",
+    "teamPoints": "team_pts",
+    "matchupAssists": "matchup_ast",
+    "matchupPotentialAssists": "matchup_potential_ast",
+    "matchupTurnovers": "matchup_tov",
+    "matchupBlocks": "matchup_blk",
+    "matchupFieldGoalsMade": "matchup_fgm",
+    "matchupFieldGoalsAttempted": "matchup_fga",
+    "matchupFieldGoalPercentage": "matchup_fg_pct",
+    "matchupThreePointersMade": "matchup_fg3m",
+    "matchupThreePointersAttempted": "matchup_fg3a",
+    "matchupThreePointerPercentage": "matchup_fg3_pct",
+    "helpBlocks": "help_blk",
+    "helpFieldGoalsMade": "help_fgm",
+    "helpFieldGoalsAttempted": "help_fga",
+    "helpFieldGoalPercentage": "help_fg_pct",
+    "matchupFreeThrowsMade": "matchup_ftm",
+    "matchupFreeThrowsAttempted": "matchup_fta",
+    "shootingFouls": "shooting_fouls",
+}
+
+# Tuple of (endpoint_class, col_map, table_name, description) for each
+# box-score type.  Used by ``_fetch_single_game_box_scores``.
+_BOX_SCORE_ENDPOINTS: tuple[tuple[Any, dict[str, str], str, str], ...] = (
+    (BoxScoreAdvancedV3,     _COL_MAP_ADVANCED,  "Box_Score_Advanced",     "BoxScoreAdvancedV3"),
+    (BoxScoreScoringV3,      _COL_MAP_SCORING,   "Box_Score_Scoring",      "BoxScoreScoringV3"),
+    (BoxScoreUsageV3,        _COL_MAP_USAGE,     "Box_Score_Usage",        "BoxScoreUsageV3"),
+    (BoxScorePlayerTrackV3,  _COL_MAP_TRACKING,  "Player_Tracking_Stats",  "BoxScorePlayerTrackV3"),
+    (BoxScoreMatchupsV3,     _COL_MAP_MATCHUPS,  "Box_Score_Matchups",     "BoxScoreMatchupsV3"),
+)
 
 
 def _get_game_ids_for_season(conn: sqlite3.Connection, season: str = SEASON) -> list[str]:
@@ -1748,7 +1891,12 @@ def _fetch_single_game_box_scores(
     # dict from concurrent mutation — not from key-level races.
     results_lock = threading.Lock()
 
-    def _make_fetcher(endpoint_class, col_map, table_name, desc_name):
+    def _make_fetcher(
+        endpoint_class: Any,
+        col_map: dict[str, str],
+        table_name: str,
+        desc_name: str,
+    ) -> Callable[[], None]:
         """Return a closure that fetches one box-score type for this game."""
         def _fetcher() -> None:
             _rate_limited_sleep()
@@ -1774,146 +1922,15 @@ def _fetch_single_game_box_scores(
                 )
         return _fetcher
 
-    _fetch_advanced = _make_fetcher(BoxScoreAdvancedV3, {
-        "gameId": "game_id", "personId": "person_id",
-        "teamId": "team_id", "position": "position",
-        "minutes": "minutes",
-        "estimatedOffensiveRating": "est_off_rating",
-        "offensiveRating": "off_rating",
-        "estimatedDefensiveRating": "est_def_rating",
-        "defensiveRating": "def_rating",
-        "estimatedNetRating": "est_net_rating",
-        "netRating": "net_rating",
-        "assistPercentage": "ast_pct",
-        "assistToTurnover": "ast_to_tov",
-        "assistRatio": "ast_ratio",
-        "offensiveReboundPercentage": "oreb_pct",
-        "defensiveReboundPercentage": "dreb_pct",
-        "reboundPercentage": "reb_pct",
-        "turnoverRatio": "tov_ratio",
-        "effectiveFieldGoalPercentage": "efg_pct",
-        "trueShootingPercentage": "ts_pct",
-        "usagePercentage": "usg_pct",
-        "estimatedUsagePercentage": "est_usg_pct",
-        "estimatedPace": "est_pace",
-        "pace": "pace", "pacePerGame": "pace_per40",
-        "possessions": "possessions", "PIE": "pie",
-    }, "Box_Score_Advanced", "BoxScoreAdvancedV3")
+    # Build a fetcher for each box-score endpoint from the module-level
+    # ``_BOX_SCORE_ENDPOINTS`` registry and run them all concurrently.
+    fetchers = [
+        _make_fetcher(cls, cmap, tbl, desc)
+        for cls, cmap, tbl, desc in _BOX_SCORE_ENDPOINTS
+    ]
 
-    _fetch_scoring = _make_fetcher(BoxScoreScoringV3, {
-        "gameId": "game_id", "personId": "person_id",
-        "teamId": "team_id", "minutes": "minutes",
-        "percentageFieldGoalsAttempted2pt": "pct_fga_2pt",
-        "percentageFieldGoalsAttempted3pt": "pct_fga_3pt",
-        "percentagePoints2pt": "pct_pts_2pt",
-        "percentagePointsMidrange2pt": "pct_pts_mid2pt",
-        "percentagePoints3pt": "pct_pts_3pt",
-        "percentagePointsFastBreak": "pct_pts_fast_break",
-        "percentagePointsFreeThrow": "pct_pts_ft",
-        "percentagePointsOffTurnovers": "pct_pts_off_tov",
-        "percentagePointsPaint": "pct_pts_paint",
-        "percentageAssisted2pt": "pct_assisted_2pt",
-        "percentageUnassisted2pt": "pct_unassisted_2pt",
-        "percentageAssisted3pt": "pct_assisted_3pt",
-        "percentageUnassisted3pt": "pct_unassisted_3pt",
-        "percentageAssistedFGM": "pct_assisted_fgm",
-        "percentageUnassistedFGM": "pct_unassisted_fgm",
-    }, "Box_Score_Scoring", "BoxScoreScoringV3")
-
-    _fetch_usage = _make_fetcher(BoxScoreUsageV3, {
-        "gameId": "game_id", "personId": "person_id",
-        "teamId": "team_id", "minutes": "minutes",
-        "usagePercentage": "usg_pct",
-        "percentageFieldGoalsMade": "pct_fgm",
-        "percentageFieldGoalsAttempted": "pct_fga",
-        "percentageThreePointersMade": "pct_fg3m",
-        "percentageThreePointersAttempted": "pct_fg3a",
-        "percentageFreeThrowsMade": "pct_ftm",
-        "percentageFreeThrowsAttempted": "pct_fta",
-        "percentageOffensiveRebounds": "pct_oreb",
-        "percentageDefensiveRebounds": "pct_dreb",
-        "percentageRebounds": "pct_reb",
-        "percentageAssists": "pct_ast",
-        "percentageTurnovers": "pct_tov",
-        "percentageSteals": "pct_stl",
-        "percentageBlocks": "pct_blk",
-        "percentageBlocksAllowed": "pct_blka",
-        "percentagePersonalFouls": "pct_pf",
-        "percentagePersonalFoulsDrawn": "pct_pfd",
-        "percentagePoints": "pct_pts",
-    }, "Box_Score_Usage", "BoxScoreUsageV3")
-
-    _fetch_tracking = _make_fetcher(BoxScorePlayerTrackV3, {
-        "gameId": "game_id", "personId": "person_id",
-        "teamId": "team_id", "teamTricode": "team_tricode",
-        "firstName": "first_name", "familyName": "family_name",
-        "position": "position", "comment": "comment",
-        "jerseyNum": "jersey_num", "minutes": "minutes",
-        "speed": "speed", "distance": "distance",
-        "reboundChancesOffensive": "rebound_chances_offensive",
-        "reboundChancesDefensive": "rebound_chances_defensive",
-        "reboundChancesTotal": "rebound_chances_total",
-        "touches": "touches",
-        "secondaryAssists": "secondary_assists",
-        "freeThrowAssists": "free_throw_assists",
-        "passes": "passes", "assists": "assists",
-        "contestedFieldGoalsMade": "contested_fg_made",
-        "contestedFieldGoalsAttempted": "contested_fg_attempted",
-        "contestedFieldGoalPercentage": "contested_fg_pct",
-        "uncontestedFieldGoalsMade": "uncontested_fg_made",
-        "uncontestedFieldGoalsAttempted": "uncontested_fg_attempted",
-        "uncontestedFieldGoalPercentage": "uncontested_fg_pct",
-        "fieldGoalPercentage": "fg_pct",
-        "defendedAtRimFieldGoalsMade": "defended_at_rim_fg_made",
-        "defendedAtRimFieldGoalsAttempted": "defended_at_rim_fg_attempted",
-        "defendedAtRimFieldGoalPercentage": "defended_at_rim_fg_pct",
-    }, "Player_Tracking_Stats", "BoxScorePlayerTrackV3")
-
-    _fetch_matchups = _make_fetcher(BoxScoreMatchupsV3, {
-        "gameId": "game_id",
-        "personIdOff": "person_id_off",
-        "personIdDef": "person_id_def",
-        "teamId": "team_id",
-        "matchupMinutes": "matchup_min",
-        "matchupMinutesSort": "matchup_min_sort",
-        "partialPossessions": "partial_poss",
-        "percentageDefenderTotalTime": "pct_def_total_time",
-        "percentageOffensiveTotalTime": "pct_off_total_time",
-        "percentageTotalTimeBothOn": "pct_total_time_both_on",
-        "switchesOn": "switches_on",
-        "playerPoints": "player_pts",
-        "teamPoints": "team_pts",
-        "matchupAssists": "matchup_ast",
-        "matchupPotentialAssists": "matchup_potential_ast",
-        "matchupTurnovers": "matchup_tov",
-        "matchupBlocks": "matchup_blk",
-        "matchupFieldGoalsMade": "matchup_fgm",
-        "matchupFieldGoalsAttempted": "matchup_fga",
-        "matchupFieldGoalPercentage": "matchup_fg_pct",
-        "matchupThreePointersMade": "matchup_fg3m",
-        "matchupThreePointersAttempted": "matchup_fg3a",
-        "matchupThreePointerPercentage": "matchup_fg3_pct",
-        "helpBlocks": "help_blk",
-        "helpFieldGoalsMade": "help_fgm",
-        "helpFieldGoalsAttempted": "help_fga",
-        "helpFieldGoalPercentage": "help_fg_pct",
-        "matchupFreeThrowsMade": "matchup_ftm",
-        "matchupFreeThrowsAttempted": "matchup_fta",
-        "shootingFouls": "shooting_fouls",
-    }, "Box_Score_Matchups", "BoxScoreMatchupsV3")
-
-    # Fetch all 5 box-score types concurrently for this game.
-    # The global rate limiter staggers request starts (~0.6 s apart), but
-    # network I/O overlaps so total wall-time is still much less than
-    # issuing 5 requests sequentially.
     with ThreadPoolExecutor(max_workers=_BOX_SCORE_TYPE_WORKERS) as pool:
-        futs = [
-            pool.submit(_fetch_advanced),
-            pool.submit(_fetch_scoring),
-            pool.submit(_fetch_usage),
-            pool.submit(_fetch_tracking),
-            pool.submit(_fetch_matchups),
-        ]
+        futs = [pool.submit(fn) for fn in fetchers]
         for f in as_completed(futs):
             f.result()  # Propagate unexpected errors; expected ones handled inside.
 
