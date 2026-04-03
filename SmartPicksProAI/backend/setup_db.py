@@ -1082,6 +1082,38 @@ CREATE TABLE IF NOT EXISTS Win_Probability_PBP (
 );
 """
 
+# ---------------------------------------------------------------------------
+# Engine pick-tracking table (Phase 3)
+# ---------------------------------------------------------------------------
+
+CREATE_SAVED_PICKS = """
+CREATE TABLE IF NOT EXISTS Saved_Picks (
+    pick_id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id              INTEGER NOT NULL REFERENCES Players(player_id),
+    player_name            TEXT,
+    team                   TEXT,
+    opponent               TEXT,
+    stat_type              TEXT    NOT NULL,
+    prop_line              REAL    NOT NULL,
+    direction              TEXT    NOT NULL,
+    model_probability      REAL,
+    edge_pct               REAL,
+    confidence_score       REAL,
+    tier                   TEXT,
+    kelly_fraction         REAL,
+    recommended_bet        REAL,
+    regime_flag            TEXT,
+    platform               TEXT,
+    vegas_spread           REAL,
+    game_total             REAL,
+    pick_date              TEXT    NOT NULL,
+    game_date              TEXT,
+    result                 TEXT,
+    actual_value           REAL,
+    created_at             TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 # New columns added to Players for existing databases.
 _PLAYERS_ALTER = [
     "ALTER TABLE Players ADD COLUMN full_name TEXT",
@@ -1255,6 +1287,8 @@ _INDEXES = (
     ("idx_leaders_player", "League_Leaders", "(player_id)"),
     ("idx_career_player", "Player_Career_Stats", "(player_id)"),
     ("idx_winprob_game", "Win_Probability_PBP", "(game_id)"),
+    ("idx_saved_picks_player", "Saved_Picks", "(player_id)"),
+    ("idx_saved_picks_date", "Saved_Picks", "(pick_date)"),
 )
 
 
@@ -1327,6 +1361,10 @@ def create_tables(db_path: str = DB_PATH) -> None:
         cursor.execute(CREATE_PLAYER_CAREER_STATS)
         cursor.execute(CREATE_TEAM_DETAILS)
         cursor.execute(CREATE_WIN_PROBABILITY_PBP)
+
+        # ---- Engine pick-tracking table (Phase 3) ----
+        logger.info("Creating engine pick-tracking table …")
+        cursor.execute(CREATE_SAVED_PICKS)
 
         # ==================================================================
         # Indexes — driven by the _INDEXES tuple for easy maintenance

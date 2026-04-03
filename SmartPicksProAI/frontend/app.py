@@ -32,6 +32,7 @@ from api_service import (
     get_league_dash_teams,
     get_league_leaders,
     get_lineups,
+    get_pick_history,
     get_play_by_play,
     get_player_advanced,
     get_player_bio,
@@ -58,8 +59,10 @@ from api_service import (
     get_teams,
     get_todays_games,
     get_win_probability,
+    save_pick,
     search_players,
     trigger_refresh,
+    update_pick_result,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -470,6 +473,7 @@ with st.sidebar:
     nav_items = [
         ("🏠  Home", "home"),
         ("🎯  Prop Analyzer", "prop_analyzer"),
+        ("📋  Pick History", "pick_history"),
         ("🏆  Standings", "standings"),
         ("🏟️  Teams", "teams_browse"),
         ("📊  Leaders & Stats", "leaders"),
@@ -1732,6 +1736,37 @@ def _page_prop_analyzer() -> None:
     hdr_cols[3].metric("Edge", f"{edge:+.1f}%")
     hdr_cols[4].metric("Direction", f"{'🟢' if direction == 'OVER' else '🔴'} {direction}")
 
+    # ── Bankroll & Regime row ───────────────────────────────────────
+    bankroll = result.get("bankroll", {})
+    regime = result.get("regime", {})
+    kelly_frac = bankroll.get("kelly_fraction", 0.0)
+    regime_changed = regime.get("regime_changed", False)
+    regime_dir = regime.get("direction", "stable")
+
+    info_cols = st.columns([1, 1, 1, 1])
+    info_cols[0].metric(
+        "Kelly Sizing",
+        bankroll.get("recommended_pct", "0.00%"),
+        delta=bankroll.get("kelly_mode", "quarter").title(),
+    )
+    regime_label = f"{'⚠️ ' if regime_changed else '✅ '}{regime_dir.title()}"
+    info_cols[1].metric(
+        "Regime",
+        regime_label,
+        delta=f"Magnitude: {regime.get('magnitude', 0.0):.1f}" if regime_changed else "Stable",
+        delta_color="off" if not regime_changed else ("normal" if regime_dir == "up" else "inverse"),
+    )
+    info_cols[2].metric(
+        "Payout",
+        f"{bankroll.get('payout_multiplier', 1.909):.3f}x",
+    )
+    if kelly_frac > 0:
+        # Show example dollar bet for $500 bankroll
+        example_bet = round(kelly_frac * 500, 2)
+        info_cols[3].metric("$500 Bankroll →", f"${example_bet:.2f}")
+    else:
+        info_cols[3].metric("$500 Bankroll →", "No bet")
+
     st.divider()
 
     # ── Explanation ──────────────────────────────────────────────────
@@ -1836,6 +1871,162 @@ def _page_prop_analyzer() -> None:
     if avoid_reasons:
         st.error("**Avoid Reasons:** " + " • ".join(avoid_reasons))
 
+    # ── Save Pick button ────────────────────────────────────────────
+    st.divider()
+    if st.button("💾 Save Pick", key="save_pick_btn", use_container_width=True):
+        save_data = {
+            "player_id": int(player_id),
+            "player_name": player_name,
+            "team": result.get("team", ""),
+            "opponent": result.get("opponent", ""),
+            "stat_type": stat_type,
+            "prop_line": float(prop_line),
+            "direction": direction,
+            "model_probability": model_prob,
+            "edge_pct": edge,
+            "confidence_score": score,
+            "tier": tier,
+            "kelly_fraction": kelly_frac,
+            "recommended_bet": round(kelly_frac * 500, 2),  # example on $500
+            "regime_flag": regime_dir,
+            "platform": platform,
+            "vegas_spread": float(vegas_spread),
+            "game_total": float(game_total),
+        }
+        save_result = save_pick(save_data)
+        if save_result.get("status") == "saved":
+            st.success(f"✅ Pick saved (ID: {save_result.get('pick_id')})")
+        else:
+            st.error(f"Failed to save: {save_result.get('message', 'Unknown error')}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pick History page (Phase 3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_TIER_EMOJI: dict[str, str] = {
+    "Platinum": "💎",
+    "Gold": "🥇",
+    "Silver": "🥈",
+    "Bronze": "🥉",
+    "Avoid": "⛔",
+}
+
+_RESULT_EMOJI: dict[str, str] = {
+    "hit": "✅",
+    "miss": "❌",
+    "push": "➖",
+}
+
+
+def _page_pick_history() -> None:
+    """Display saved picks with performance tracking."""
+
+    st.title("📋 Pick History")
+    st.caption("Track your saved prop analyses and record outcomes.")
+
+    picks = get_pick_history(limit=100)
+
+    if not picks:
+        st.info("No saved picks yet.  Use the **Prop Analyzer** to analyse and save picks.")
+        return
+
+    # ── Summary stats ───────────────────────────────────────────────
+    total = len(picks)
+    hits = sum(1 for p in picks if p.get("result") == "hit")
+    misses = sum(1 for p in picks if p.get("result") == "miss")
+    pushes = sum(1 for p in picks if p.get("result") == "push")
+    pending = total - hits - misses - pushes
+    decided = hits + misses
+    win_rate = (hits / decided * 100) if decided > 0 else 0.0
+
+    sum_cols = st.columns(6)
+    sum_cols[0].metric("Total Picks", total)
+    sum_cols[1].metric("Hits", f"✅ {hits}")
+    sum_cols[2].metric("Misses", f"❌ {misses}")
+    sum_cols[3].metric("Pushes", f"➖ {pushes}")
+    sum_cols[4].metric("Pending", f"⏳ {pending}")
+    sum_cols[5].metric("Win Rate", f"{win_rate:.1f}%" if decided > 0 else "N/A")
+
+    # ── Tier breakdown ──────────────────────────────────────────────
+    if decided > 0:
+        st.divider()
+        st.subheader("📊 Performance by Tier")
+        tiers_seen: dict[str, dict[str, int]] = {}
+        for p in picks:
+            t = p.get("tier", "Bronze")
+            if t not in tiers_seen:
+                tiers_seen[t] = {"hits": 0, "misses": 0, "total": 0}
+            tiers_seen[t]["total"] += 1
+            if p.get("result") == "hit":
+                tiers_seen[t]["hits"] += 1
+            elif p.get("result") == "miss":
+                tiers_seen[t]["misses"] += 1
+
+        tier_cols = st.columns(min(len(tiers_seen), 5))
+        for i, (tier_name, counts) in enumerate(sorted(tiers_seen.items(), key=lambda x: -counts.get("total", 0) if (counts := x[1]) else 0)):
+            tier_decided = counts["hits"] + counts["misses"]
+            tier_wr = (counts["hits"] / tier_decided * 100) if tier_decided > 0 else 0.0
+            emoji = _TIER_EMOJI.get(tier_name, "🥉")
+            tier_cols[i % len(tier_cols)].metric(
+                f"{emoji} {tier_name}",
+                f"{tier_wr:.0f}% WR" if tier_decided > 0 else "N/A",
+                delta=f"{counts['hits']}/{tier_decided} decided" if tier_decided > 0 else f"{counts['total']} pending",
+            )
+
+    st.divider()
+
+    # ── Pick table ──────────────────────────────────────────────────
+    st.subheader("🗂️ All Picks")
+
+    for pick in picks:
+        pick_id = pick.get("pick_id", "?")
+        p_name = pick.get("player_name", "Unknown")
+        p_tier = pick.get("tier", "Bronze")
+        p_dir = pick.get("direction", "?")
+        p_stat = pick.get("stat_type", "?")
+        p_line = pick.get("prop_line", 0)
+        p_conf = pick.get("confidence_score", 0)
+        p_edge = pick.get("edge_pct", 0)
+        p_kelly = pick.get("kelly_fraction", 0)
+        p_result = pick.get("result")
+        p_date = pick.get("pick_date", "?")
+        p_opp = pick.get("opponent", "?")
+        p_regime = pick.get("regime_flag", "stable")
+
+        tier_emoji = _TIER_EMOJI.get(p_tier, "🥉")
+        result_emoji = _RESULT_EMOJI.get(p_result, "⏳") if p_result else "⏳"
+        dir_icon = "🟢" if p_dir == "OVER" else "🔴"
+
+        with st.expander(
+            f"{result_emoji} {tier_emoji} **{p_name}** — {p_stat.upper()} "
+            f"{dir_icon} {p_dir} {p_line}  •  vs {p_opp}  •  {p_date}",
+            expanded=False,
+        ):
+            det_cols = st.columns([1, 1, 1, 1, 1])
+            det_cols[0].metric("Confidence", f"{p_conf:.0f}/100")
+            det_cols[1].metric("Edge", f"{p_edge:+.1f}%")
+            det_cols[2].metric("Kelly", f"{p_kelly * 100:.2f}%")
+            det_cols[3].metric("Regime", p_regime.title())
+            det_cols[4].metric("Platform", pick.get("platform", "?").title())
+
+            if not p_result:
+                st.caption("Record outcome:")
+                res_cols = st.columns(4)
+                if res_cols[0].button("✅ Hit", key=f"hit_{pick_id}"):
+                    update_pick_result(int(pick_id), "hit")
+                    st.rerun()
+                if res_cols[1].button("❌ Miss", key=f"miss_{pick_id}"):
+                    update_pick_result(int(pick_id), "miss")
+                    st.rerun()
+                if res_cols[2].button("➖ Push", key=f"push_{pick_id}"):
+                    update_pick_result(int(pick_id), "push")
+                    st.rerun()
+            else:
+                actual = pick.get("actual_value")
+                if actual is not None:
+                    st.text(f"  Actual value: {actual}")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Page router
@@ -1852,6 +2043,7 @@ _PAGE_DISPATCH: dict[str, Callable[[], None]] = {
     "defense": _page_defense,
     "more": _page_more,
     "prop_analyzer": _page_prop_analyzer,
+    "pick_history": _page_pick_history,
 }
 
 _page_fn = _PAGE_DISPATCH.get(st.session_state.page)

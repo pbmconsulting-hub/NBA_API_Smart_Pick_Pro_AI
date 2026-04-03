@@ -433,3 +433,77 @@ def trigger_refresh() -> dict:
     except (requests.RequestException, ValueError) as exc:
         logger.error("Failed to trigger refresh: %s", exc)
         return {"status": "error", "message": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Pick-tracking endpoints (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def save_pick(pick_data: dict) -> dict:
+    """Persist a pick analysis result for future tracking.
+
+    Calls ``POST /api/picks/save``.
+
+    Args:
+        pick_data: Dict matching the SavePickRequest schema.
+
+    Returns:
+        ``{"status": "saved", "pick_id": <int>}`` on success,
+        or ``{"status": "error", ...}`` on failure.
+    """
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/api/picks/save",
+            json=pick_data,
+            timeout=DEFAULT_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("POST /api/picks/save failed: %s", exc)
+        return {"status": "error", "message": str(exc)}
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_pick_history(limit: int = 50) -> list[dict]:
+    """Retrieve saved pick history from the backend.
+
+    Calls ``GET /api/picks/history``.
+
+    Args:
+        limit: Maximum number of picks to return.
+
+    Returns:
+        List of pick dicts, newest first.
+    """
+    return _get(f"/api/picks/history", params={"limit": limit}, key="picks")
+
+
+def update_pick_result(pick_id: int, result: str, actual_value: float | None = None) -> dict:
+    """Record the outcome of a previously saved pick.
+
+    Calls ``POST /api/picks/result``.
+
+    Args:
+        pick_id: The pick's database ID.
+        result: ``'hit'``, ``'miss'``, or ``'push'``.
+        actual_value: The player's actual stat value, if known.
+
+    Returns:
+        ``{"status": "updated", "pick_id": <int>}`` or error dict.
+    """
+    payload: dict = {"pick_id": pick_id, "result": result}
+    if actual_value is not None:
+        payload["actual_value"] = actual_value
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/api/picks/result",
+            json=payload,
+            timeout=DEFAULT_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("POST /api/picks/result failed: %s", exc)
+        return {"status": "error", "message": str(exc)}

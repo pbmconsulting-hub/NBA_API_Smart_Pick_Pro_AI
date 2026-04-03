@@ -1202,6 +1202,10 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
     from engine.projections import build_player_projection
     from engine.simulation import run_enhanced_simulation
 
+    # Phase 3 engine modules
+    from engine.bankroll import calculate_kelly_fraction, odds_to_payout_multiplier
+    from engine.regime_detection import detect_regime_change
+
     # --- Validate stat type ---
     stat_type = body.stat_type.lower()
     if stat_type not in STAT_TYPE_TO_DB_COL:
@@ -1393,7 +1397,45 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             "avoid_reasons": [],
         }
 
-    # ── Step 5: Explanation ─────────────────────────────────────────
+    # ── Step 5: Regime detection ────────────────────────────────────
+    try:
+        db_col = STAT_TYPE_TO_DB_COL[stat_type]
+        regime = detect_regime_change(
+            game_logs=engine_logs,
+            stat_key=db_col,
+            window=10,
+        )
+    except Exception as exc:
+        logger.warning("Regime detection failed: %s", exc)
+        regime = {
+            "regime_changed": False,
+            "direction": "stable",
+            "magnitude": 0.0,
+            "confidence": 0.0,
+            "detection_method": "error_fallback",
+        }
+
+    # ── Step 6: Kelly Criterion bet sizing ──────────────────────────
+    # Default -110 payout for standard props (1.909x gross payout).
+    payout_multiplier = odds_to_payout_multiplier(-110)
+    try:
+        kelly_fraction = calculate_kelly_fraction(
+            win_probability=model_prob,
+            payout_multiplier=payout_multiplier,
+            kelly_fraction_mode="quarter",
+        )
+    except Exception as exc:
+        logger.warning("Kelly sizing failed: %s", exc)
+        kelly_fraction = 0.0
+
+    bankroll_sizing = {
+        "kelly_fraction": round(kelly_fraction, 6),
+        "kelly_mode": "quarter",
+        "payout_multiplier": round(payout_multiplier, 4),
+        "recommended_pct": f"{kelly_fraction * 100:.2f}%",
+    }
+
+    # ── Step 7: Explanation ─────────────────────────────────────────
     try:
         explanation = generate_pick_explanation(
             player_data=player_data,
@@ -1431,8 +1473,158 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         },
         "forces": forces,
         "confidence": confidence,
+        "regime": regime,
+        "bankroll": bankroll_sizing,
         "explanation": explanation,
     }
+
+
+# ---------------------------------------------------------------------------
+# Pick-tracking endpoints (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class SavePickRequest(BaseModel):
+    """Request body for persisting an analysis result."""
+
+    player_id: int
+    player_name: str = ""
+    team: str = ""
+    opponent: str = ""
+    stat_type: str
+    prop_line: float
+    direction: str
+    model_probability: float = 0.5
+    edge_pct: float = 0.0
+    confidence_score: float = 0.0
+    tier: str = "Bronze"
+    kelly_fraction: float = 0.0
+    recommended_bet: float = 0.0
+    regime_flag: str = "stable"
+    platform: str = "prizepicks"
+    vegas_spread: float = 0.0
+    game_total: float = 220.0
+    game_date: str | None = None
+
+
+@app.post("/api/picks/save")
+def save_pick(body: SavePickRequest) -> dict:
+    """Persist a pick analysis result for future tracking.
+
+    Stores the key fields from an ``/api/picks/analyze`` response into the
+    ``Saved_Picks`` table so the user can review history and eventual
+    outcomes.
+
+    Returns:
+        ``{"status": "saved", "pick_id": <int>}`` on success.
+    """
+    logger.info(
+        "POST /api/picks/save player=%d stat=%s line=%.1f",
+        body.player_id,
+        body.stat_type,
+        body.prop_line,
+    )
+
+    pick_date = date.today().isoformat()
+
+    try:
+        with _db() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO Saved_Picks (
+                    player_id, player_name, team, opponent, stat_type,
+                    prop_line, direction, model_probability, edge_pct,
+                    confidence_score, tier, kelly_fraction, recommended_bet,
+                    regime_flag, platform, vegas_spread, game_total,
+                    pick_date, game_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    body.player_id,
+                    body.player_name,
+                    body.team,
+                    body.opponent,
+                    body.stat_type,
+                    body.prop_line,
+                    body.direction,
+                    body.model_probability,
+                    body.edge_pct,
+                    body.confidence_score,
+                    body.tier,
+                    body.kelly_fraction,
+                    body.recommended_bet,
+                    body.regime_flag,
+                    body.platform,
+                    body.vegas_spread,
+                    body.game_total,
+                    pick_date,
+                    body.game_date or pick_date,
+                ),
+            )
+            conn.commit()
+            pick_id = cursor.lastrowid
+        return {"status": "saved", "pick_id": pick_id}
+    except sqlite3.Error as exc:
+        logger.exception("Failed to save pick.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+PICK_HISTORY_DEFAULT_LIMIT = 50
+
+
+@app.get("/api/picks/history")
+def get_pick_history(limit: int = PICK_HISTORY_DEFAULT_LIMIT) -> dict:
+    """Return saved picks, newest first.
+
+    Args:
+        limit: Maximum number of picks to return (default 50).
+
+    Returns:
+        ``{"picks": [...]}``.
+    """
+    logger.info("GET /api/picks/history limit=%d", limit)
+    picks = _query_rows(
+        "SELECT * FROM Saved_Picks ORDER BY created_at DESC LIMIT ?",
+        (min(limit, 500),),
+        label="get_pick_history",
+    )
+    return {"picks": picks}
+
+
+class UpdatePickResultRequest(BaseModel):
+    """Request body for recording the outcome of a saved pick."""
+
+    pick_id: int
+    result: str = Field(..., description="'hit', 'miss', or 'push'.")
+    actual_value: float | None = None
+
+
+@app.post("/api/picks/result")
+def update_pick_result(body: UpdatePickResultRequest) -> dict:
+    """Record the outcome of a previously saved pick.
+
+    Updates the ``result`` and ``actual_value`` columns of the matching
+    ``Saved_Picks`` row.
+
+    Returns:
+        ``{"status": "updated", "pick_id": <int>}``.
+    """
+    logger.info("POST /api/picks/result pick_id=%d result=%s", body.pick_id, body.result)
+    allowed = {"hit", "miss", "push"}
+    if body.result.lower() not in allowed:
+        raise HTTPException(status_code=400, detail=f"result must be one of {allowed}")
+
+    try:
+        with _db() as conn:
+            conn.execute(
+                "UPDATE Saved_Picks SET result = ?, actual_value = ? WHERE pick_id = ?",
+                (body.result.lower(), body.actual_value, body.pick_id),
+            )
+            conn.commit()
+        return {"status": "updated", "pick_id": body.pick_id}
+    except sqlite3.Error as exc:
+        logger.exception("Failed to update pick result.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
