@@ -70,6 +70,9 @@ MAX_GAME_COLUMNS = 4
 MAX_RECENT_GAMES = 20
 MAX_SEARCH_RESULTS = 10
 
+# Example bankroll used for display purposes only (not financial advice).
+EXAMPLE_BANKROLL = 500.0
+
 st.set_page_config(
     page_title="SmartPicksProAI",
     page_icon="🏀",
@@ -852,8 +855,9 @@ def _page_player_profile() -> None:
             bio_cols[4].metric("Country", bio.get("country", "N/A"))
             bio_cols[5].metric(
                 "Experience",
-                f"{bio.get('seasons', 'N/A')} yrs"
-                if bio.get("seasons") else bio.get("draft_year", "N/A"),
+                f"{bio['seasons']} yrs"
+                if bio.get("seasons") is not None
+                else "N/A",
             )
             bio_cols[6].metric("GP", bio.get("gp", "N/A"))
             bio_cols[7].metric(
@@ -1718,11 +1722,11 @@ def _page_prop_analyzer() -> None:
         f"{bankroll.get('payout_multiplier', 1.909):.3f}x",
     )
     if kelly_frac > 0:
-        # Show example dollar bet for $500 bankroll
-        example_bet = round(kelly_frac * 500, 2)
-        info_cols[3].metric("$500 Bankroll →", f"${example_bet:.2f}")
+        # Show example dollar bet for example bankroll
+        example_bet = round(kelly_frac * EXAMPLE_BANKROLL, 2)
+        info_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", f"${example_bet:.2f}")
     else:
-        info_cols[3].metric("$500 Bankroll →", "No bet")
+        info_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", "No bet")
 
     st.divider()
 
@@ -1983,7 +1987,7 @@ def _page_prop_analyzer() -> None:
             "confidence_score": score,
             "tier": tier,
             "kelly_fraction": kelly_frac,
-            "recommended_bet": round(kelly_frac * 500, 2),  # example on $500
+            "recommended_bet": round(kelly_frac * EXAMPLE_BANKROLL, 2),
             "regime_flag": regime_dir,
             "platform": platform,
             "vegas_spread": float(vegas_spread),
