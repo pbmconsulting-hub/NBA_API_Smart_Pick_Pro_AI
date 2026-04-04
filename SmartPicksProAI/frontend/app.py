@@ -34,6 +34,7 @@ from styles.theme import (
     get_sidebar_brand_html,
 )
 from tracking.database import initialize_database as _init_tracker_db
+from tracking.auto_resolver import auto_resolve_pending_picks as _auto_resolve
 from api_service import (
     get_defense_vs_position,
     get_league_leaders,
@@ -69,6 +70,7 @@ from pages import (
     standings as _pg_standings,
     team_detail as _pg_team_detail,
     teams_browse as _pg_teams_browse,
+    trade_impact as _pg_trade_impact,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -84,6 +86,12 @@ st.set_page_config(
 
 # Initialize bet tracker database
 _init_tracker_db()
+
+# Auto-resolve pending picks from yesterday's box scores
+try:
+    _auto_resolve()
+except Exception:
+    pass  # Never block app startup for auto-resolve
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Session-state navigation
@@ -136,6 +144,7 @@ with st.sidebar:
         ("📈  Bet Tracker", "bet_tracker"),
         ("📋  Pick History", "pick_history"),
         ("🩺  Model Health", "model_health"),
+        ("🔀  Trade Impact", "trade_impact"),
         ("🏆  Standings", "standings"),
         ("🏟️  Teams", "teams_browse"),
         ("📊  Leaders & Stats", "leaders"),
@@ -252,6 +261,7 @@ _PAGE_DISPATCH: dict[str, Callable[[], None]] = {
     "pick_history": _pg_pick_history.render,
     "bet_tracker": _pg_bet_tracker.render,
     "model_health": _pg_model_health.render,
+    "trade_impact": _pg_trade_impact.render,
 }
 
 _page_fn = _PAGE_DISPATCH.get(st.session_state.page)

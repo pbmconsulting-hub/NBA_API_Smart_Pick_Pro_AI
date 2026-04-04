@@ -679,6 +679,16 @@ def build_player_projection(
         game_total_factor = max(0.92, min(1.08, game_total_factor))  # Cap at ±8%
     else:
         game_total_factor = 1.0  # Neutral if no total provided or league avg unavailable
+
+    # --- Factor 5b: Implied Pace from Game Total ---
+    # Higher totals imply faster pace → more possessions → more counting stats.
+    # 230 is the midpoint of typical NBA game totals (range ~205–250).
+    # The 0.15 coefficient gives ~1–3% adjustment for most games, capped ±7%.
+    game_total_implied_pace = 1.0
+    if game_total > 0:
+        game_total_implied_pace = 1.0 + ((game_total - 230.0) / 230.0) * 0.15
+        game_total_implied_pace = max(0.93, min(1.07, game_total_implied_pace))
+
     # --- Factor 6: Blowout Risk (W6: Smart Blowout Risk) ---
     # Now uses BOTH spread AND game total, plus team tendency,
     # instead of just the defensive rating.
@@ -757,6 +767,7 @@ def build_player_projection(
             stat_def
             * pace_factor
             * game_total_factor
+            * game_total_implied_pace
             * (1.0 + ha)
             * rest_factor
             * minutes_adjustment_factor

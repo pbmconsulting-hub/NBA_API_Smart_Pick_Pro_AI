@@ -75,31 +75,39 @@ def render() -> None:
 
     st.divider()
 
-    # ── Calibration Curve ─────────────────────────────────────────
-    st.subheader("📈 Calibration Curve")
+    # ── Per-Stat Calibration Curves ──────────────────────────────
+    st.subheader("📈 Calibration Curves (Per Stat)")
     st.caption("Predicted probability vs actual hit rate. Perfect calibration = diagonal line.")
 
-    curve_pts = curve_data.get("curve", [])
-    if curve_pts:
-        cal_df = pd.DataFrame(curve_pts)
-        cal_df["Perfect"] = cal_df["predicted"]
-        chart_df = cal_df[["predicted", "actual", "Perfect"]].rename(
-            columns={"predicted": "Predicted", "actual": "Actual Hit Rate"}
-        )
-        st.line_chart(chart_df.set_index("Predicted"), use_container_width=True)
+    # Collect stat types from picks for tabs
+    _stat_types_for_curves = sorted({p.get("stat_type", "") for p in (get_pick_history(limit=500) or []) if p.get("stat_type")})
+    _cal_tab_labels = ["All Stats"] + [s.title() for s in _stat_types_for_curves]
+    _cal_tab_keys = [None] + _stat_types_for_curves
 
-        if curve_data.get("is_isotonic"):
-            st.caption("✅ Isotonic (PAVA-smoothed) calibration applied.")
-        else:
-            st.caption("Coarse bucket calibration (not enough data for isotonic).")
-
-        with st.expander("📋 Calibration Data", expanded=False):
-            st.dataframe(
-                pd.DataFrame(curve_pts)[["predicted", "actual", "count", "gap"]],
-                use_container_width=True,
-            )
-    else:
-        st.info("No calibration curve data available.")
+    if _cal_tab_labels:
+        cal_tabs = st.tabs(_cal_tab_labels)
+        for cal_tab, cal_stat in zip(cal_tabs, _cal_tab_keys):
+            with cal_tab:
+                _curve = get_isotonic_calibration_curve(days=days, stat_type=cal_stat)
+                _pts = _curve.get("curve", [])
+                if _pts:
+                    _cdf = pd.DataFrame(_pts)
+                    _cdf["Perfect"] = _cdf["predicted"]
+                    _chart = _cdf[["predicted", "actual", "Perfect"]].rename(
+                        columns={"predicted": "Predicted", "actual": "Actual Hit Rate"}
+                    )
+                    st.line_chart(_chart.set_index("Predicted"), use_container_width=True)
+                    if _curve.get("is_isotonic"):
+                        st.caption("✅ Isotonic (PAVA-smoothed) calibration applied.")
+                    else:
+                        st.caption("Coarse bucket calibration (not enough data for isotonic).")
+                    with st.expander("📋 Calibration Data", expanded=False):
+                        st.dataframe(
+                            pd.DataFrame(_pts)[["predicted", "actual", "count", "gap"]],
+                            use_container_width=True,
+                        )
+                else:
+                    st.info(f"No calibration data for {cal_stat.title() if cal_stat else 'all stats'}.")
 
     st.divider()
 
@@ -211,3 +219,79 @@ def render() -> None:
         st.caption("Buckets where predicted probability exceeds actual hit rate by >5%.")
         for mid in overconf:
             st.text(f"  • {mid:.0%} bucket")
+
+    # ── Backtester ────────────────────────────────────────────────
+    st.divider()
+    st.subheader("🧪 Historical Backtester")
+    st.caption("Run the engine's backtester on archived slates to validate model accuracy on historical data.")
+
+    try:
+        from engine.backtester import run_backtest
+        _backtester_available = True
+    except ImportError:
+        _backtester_available = False
+
+    if _backtester_available:
+        bt_cols = st.columns([1, 1, 1])
+        bt_season = bt_cols[0].text_input("Season", value="2024-25", key="bt_season")
+        bt_stat_types = bt_cols[1].multiselect(
+            "Stat Types",
+            ["points", "rebounds", "assists", "threes", "steals", "blocks", "turnovers"],
+            default=["points", "rebounds", "assists"],
+            key="bt_stat_types",
+        )
+        bt_min_edge = bt_cols[2].slider("Min Edge %", 0.0, 0.20, 0.05, 0.01, key="bt_min_edge")
+        bt_tier = st.selectbox("Tier Filter", ["All", "Platinum", "Gold", "Silver", "Bronze"], key="bt_tier")
+
+        if st.button("🚀 Run Backtest", key="bt_run", use_container_width=True):
+            with st.spinner("Running historical backtest…"):
+                tier_arg = None if bt_tier == "All" else bt_tier
+                bt_result = run_backtest(
+                    season=bt_season,
+                    stat_types=bt_stat_types,
+                    min_edge=bt_min_edge,
+                    tier_filter=tier_arg,
+                )
+
+            if bt_result.get("message"):
+                st.info(bt_result["message"])
+            else:
+                bt_m = st.columns([1, 1, 1, 1])
+                bt_m[0].metric("Total Plays", bt_result.get("total_plays", 0))
+                bt_acc = bt_result.get("accuracy", 0)
+                bt_m[1].metric("Accuracy", f"{bt_acc:.1%}" if bt_acc else "N/A")
+                bt_roi = bt_result.get("roi", 0)
+                bt_m[2].metric("ROI", f"{bt_roi:+.1f}%" if bt_roi else "N/A")
+                bt_m[3].metric("Sharpe Ratio", f"{bt_result.get('sharpe_ratio', 0):.2f}")
+
+                # Tier breakdown
+                tier_breakdown = bt_result.get("tier_breakdown", {})
+                if tier_breakdown:
+                    st.markdown("**Tier Breakdown**")
+                    bt_rows = []
+                    for t_name, t_data in tier_breakdown.items():
+                        t_dec = t_data.get("hits", 0) + t_data.get("misses", 0)
+                        t_wr = (t_data["hits"] / t_dec * 100) if t_dec > 0 else 0
+                        bt_rows.append({
+                            "Tier": t_name,
+                            "Plays": t_data.get("total", 0),
+                            "Hits": t_data.get("hits", 0),
+                            "Misses": t_data.get("misses", 0),
+                            "Win Rate %": round(t_wr, 1),
+                        })
+                    if bt_rows:
+                        st.dataframe(pd.DataFrame(bt_rows), use_container_width=True)
+
+                # P&L chart
+                pick_log = bt_result.get("pick_log", [])
+                if pick_log:
+                    st.markdown("**Cumulative P&L**")
+                    cumulative = []
+                    running = 0.0
+                    for pl in pick_log:
+                        running += pl.get("pnl", 0)
+                        cumulative.append({"Play #": len(cumulative) + 1, "Cumulative P&L": round(running, 2)})
+                    if cumulative:
+                        st.line_chart(pd.DataFrame(cumulative).set_index("Play #"), use_container_width=True)
+    else:
+        st.info("Backtester module not available. Ensure engine/backtester.py is on the path.")

@@ -28,6 +28,19 @@ def render() -> None:
         "simulation, edge detection, and confidence scoring."
     )
 
+    # ── Pre-fill from auto_prop_player_id (set by player_profile / home) ──
+    auto_pid = st.session_state.pop("auto_prop_player_id", None)
+    auto_stat = st.session_state.pop("auto_prop_stat", None)
+    auto_line = st.session_state.pop("auto_prop_line", None)
+    if auto_pid:
+        try:
+            from api_service import get_player_bio
+            bio = get_player_bio(int(auto_pid))
+            if bio:
+                st.session_state["prop_player_search"] = bio.get("player_name", "")
+        except Exception:
+            pass
+
     # ── Sidebar inputs ──────────────────────────────────────────────
     with st.sidebar:
         st.subheader("🔍 Prop Setup")
@@ -335,7 +348,7 @@ def render() -> None:
             if epm or raptor:
                 adv_cols = st.columns([1, 1, 1, 1])
                 if epm:
-                    adv_cols[0].metric("EPM Total", f"{epm.get('total', 0):+.1f}")
+                    adv_cols[0].metric("EPM Total", f"{epm.get('total_epm', epm.get('total', 0)):+.1f}")
                     adv_cols[1].metric("EPM Percentile", f"{epm.get('percentile', 50):.0f}th")
                 if raptor:
                     adv_cols[2].metric("RAPTOR Total", f"{raptor.get('raptor_total', 0):+.1f}")
@@ -450,6 +463,43 @@ def render() -> None:
                 text = explanation.get(key)
                 if text:
                     st.markdown(f"**{key.replace('_', ' ').title()}:** {text}")
+
+        # ── Correlated Props (correlation.py) ────────────────────────
+        st.divider()
+        st.subheader("🔗 Correlated Props")
+        st.caption("Props that tend to move together with this pick.")
+        try:
+            from engine.correlation import (
+                get_teammate_correlation,
+                get_within_player_cross_stat_correlation,
+                calculate_game_environment_correlation,
+            )
+            _cross_stats = ["points", "rebounds", "assists", "threes", "steals", "blocks"]
+            corr_rows = []
+            for cs in _cross_stats:
+                if cs == stat_type:
+                    continue
+                try:
+                    within_corr = get_within_player_cross_stat_correlation(stat_type, cs)
+                    env_corr = calculate_game_environment_correlation(float(game_total), cs)
+                    if abs(within_corr) > 0.05 or abs(env_corr) > 0.05:
+                        corr_rows.append({
+                            "Linked Stat": cs.title(),
+                            "Cross-Stat Corr": f"{within_corr:+.2f}",
+                            "Game Env Corr": f"{env_corr:+.2f}",
+                            "Signal": "🟢 Positive" if within_corr > 0 else "🔴 Negative",
+                        })
+                except Exception:
+                    pass
+            if corr_rows:
+                import pandas as _pd
+                st.dataframe(_pd.DataFrame(corr_rows), use_container_width=True)
+            else:
+                st.caption("No significant correlations detected.")
+        except ImportError:
+            st.caption("Correlation module not available.")
+        except Exception:
+            st.caption("Could not compute correlations.")
 
     # ══════════════════════════════════════════════════════════════
     # TAB 3: Simulation Chart
@@ -569,6 +619,31 @@ def render() -> None:
             st.subheader("⚠️ Risk Factors")
             for rf in risk_factors:
                 st.warning(rf)
+
+        # ── Line Movement (market_movement.py) ─────────────────────
+        st.divider()
+        st.subheader("📉 Line Movement")
+        try:
+            from engine.market_movement import get_movement_summary
+            _move = get_movement_summary(player_name, stat_type, platform=platform)
+            if _move and _move.get("has_movement"):
+                lm_cols = st.columns([1, 1, 1])
+                _open = _move.get("opening_line", prop_line)
+                _curr = _move.get("current_line", prop_line)
+                _dir_lm = "⬆️ Up" if _curr > _open else ("⬇️ Down" if _curr < _open else "➡️ No Change")
+                lm_cols[0].metric("Opening Line", f"{_open}")
+                lm_cols[1].metric("Current Line", f"{_curr}", delta=f"{_curr - _open:+.1f}")
+                lm_cols[2].metric("Direction", _dir_lm)
+                if _move.get("sharp_money_flag"):
+                    st.warning("🔥 **Sharp money detected** — significant line movement indicates professional action.")
+                elif abs(_curr - _open) >= 0.5:
+                    st.info(f"Line moved {abs(_curr - _open):.1f} points from open.")
+            else:
+                st.caption("No line movement data available for this player/stat.")
+        except ImportError:
+            st.caption("Line movement module not available.")
+        except Exception:
+            st.caption("No line movement data available.")
 
         avoid_reasons = conf.get("avoid_reasons", [])
         if avoid_reasons:

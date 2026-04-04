@@ -359,7 +359,25 @@ def run(context: dict) -> dict:
         except Exception as exc:
             _logger.debug("Standings join failed: %s", exc)
 
-        # ── 11. Fill remaining NaN with 0 for numeric columns ─────────
+        # ── 11a. Vegas-derived features ─────────────────────────────────
+        # When the pipeline context includes game_total and vegas_spread
+        # (set at inference time), add them as direct model features.
+        ctx_game_total = context.get("game_total")
+        ctx_vegas_spread = context.get("vegas_spread")
+        if ctx_game_total is not None:
+            gt = float(ctx_game_total)
+            df["game_total_normalized"] = gt / 230.0
+            # Implied pace proxy: higher totals → faster pace → more possessions
+            df["game_total_implied_pace"] = gt / 230.0  # same normalisation
+        else:
+            df["game_total_normalized"] = 0.0
+            df["game_total_implied_pace"] = 0.0
+        if ctx_vegas_spread is not None:
+            df["vegas_spread_abs"] = abs(float(ctx_vegas_spread))
+        else:
+            df["vegas_spread_abs"] = 0.0
+
+        # ── 11b. Fill remaining NaN with 0 for numeric columns ────────
         num_cols = df.select_dtypes(include="number").columns
         df[num_cols] = df[num_cols].fillna(0)
 

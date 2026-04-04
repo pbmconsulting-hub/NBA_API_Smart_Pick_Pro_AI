@@ -32,7 +32,27 @@ def render() -> None:
     pending = total - hits - misses - pushes
     decided = hits + misses
     win_rate = (hits / decided * 100) if decided > 0 else 0.0
-    roi = ((hits * 0.909 - misses) / decided * 100) if decided > 0 else 0.0
+
+    # ROI mode toggle
+    roi_mode = st.radio("ROI Mode", ["Flat (-110)", "Kelly-Weighted"], horizontal=True, key="roi_mode")
+
+    if roi_mode == "Flat (-110)":
+        roi = ((hits * 0.909 - misses) / decided * 100) if decided > 0 else 0.0
+    else:
+        # Kelly-weighted ROI: sum kelly_fraction * payout for hits, subtract kelly_fraction for misses
+        kelly_profit = 0.0
+        kelly_risked = 0.0
+        for p in picks:
+            kf = float(p.get("kelly_fraction", 0) or 0)
+            if kf <= 0:
+                kf = 0.01  # minimum fraction for decided picks
+            if p.get("result") == "hit":
+                kelly_profit += kf * 0.909  # payout at -110
+                kelly_risked += kf
+            elif p.get("result") == "miss":
+                kelly_profit -= kf
+                kelly_risked += kf
+        roi = (kelly_profit / kelly_risked * 100) if kelly_risked > 0 else 0.0
 
     sum_cols = st.columns(7)
     sum_cols[0].metric("Total Picks", total)
@@ -41,8 +61,9 @@ def render() -> None:
     sum_cols[3].metric("Pushes", f"➖ {pushes}")
     sum_cols[4].metric("Pending", f"⏳ {pending}")
     sum_cols[5].metric("Win Rate", f"{win_rate:.1f}%" if decided > 0 else "N/A")
+    _roi_label = "Est. ROI (Kelly)" if roi_mode == "Kelly-Weighted" else "Est. ROI (-110)"
     sum_cols[6].metric(
-        "Est. ROI (-110)",
+        _roi_label,
         f"{roi:+.1f}%" if decided > 0 else "N/A",
         delta="Profit" if roi > 0 else ("Loss" if roi < 0 else "Break Even"),
         delta_color="normal" if roi > 0 else ("inverse" if roi < 0 else "off"),
