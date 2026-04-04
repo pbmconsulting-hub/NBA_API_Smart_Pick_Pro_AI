@@ -1445,3 +1445,160 @@ def calculate_composite_win_score(
 # ============================================================
 # END SECTION: Composite Win Score
 # ============================================================
+# ============================================================
+# SECTION: Cross-Platform Edge Detection
+# ============================================================
+# DFS-specific breakeven probabilities per platform.
+# PrizePicks & Underdog have NO per-leg vig — the cost is baked
+# into the payout structure.  Traditional sportsbooks charge ~4.5%
+# vig via -110 lines (breakeven 52.38%).
+_PLATFORM_BREAKEVEN: dict[str, float] = {
+    "PrizePicks": 0.50,          # No per-leg vig; 50% breakeven
+    "PrizePicks Power": 0.50,    # All-or-nothing; same per-leg breakeven
+    "Underdog Fantasy": 0.50,    # No per-leg vig; 50% breakeven
+    "DraftKings": 0.5238,        # Standard -110 juice
+    "FanDuel": 0.5238,
+    "BetMGM": 0.5238,
+    "Caesars": 0.5238,
+    "PointsBet": 0.5238,
+    "DraftKings Pick6": 0.50,    # DFS-style; 50% breakeven
+}
+
+
+def detect_cross_platform_edge(
+    platform_lines,
+    model_projection,
+    simulation_result,
+    stat_type=None,
+):
+    """Detect mispricing opportunities across all betting platforms.
+
+    Given a dict of ``{platform: line}`` and the model's projection +
+    simulation output, this function evaluates each platform independently
+    and identifies which ones offer the best (and worst) edges.
+
+    Args:
+        platform_lines (dict): ``{platform_name: prop_line}`` from all
+            available sources (sportsbooks + DFS platforms).
+        model_projection (float): Our model's projected value for the stat.
+        simulation_result (dict): Output from ``run_enhanced_simulation``,
+            must include ``probability_over`` and optionally
+            ``simulated_results``.
+        stat_type (str or None): Stat type for threshold lookups.
+
+    Returns:
+        dict: {
+            'platforms': [
+                {
+                    'platform': str,
+                    'line': float,
+                    'direction': 'OVER' | 'UNDER',
+                    'model_probability': float,
+                    'breakeven': float,
+                    'edge_pct': float,
+                    'has_edge': bool,
+                    'edge_rating': str,   # 'Strong' | 'Moderate' | 'Weak' | 'None'
+                },
+                ...
+            ],
+            'best_platform': str | None,
+            'best_edge_pct': float,
+            'worst_platform': str | None,
+            'consensus_line': float | None,
+            'line_spread': float,          # max(line) - min(line) across platforms
+            'mispricing_detected': bool,
+        }
+    """
+    if not platform_lines:
+        return {
+            "platforms": [],
+            "best_platform": None,
+            "best_edge_pct": 0.0,
+            "worst_platform": None,
+            "consensus_line": None,
+            "line_spread": 0.0,
+            "mispricing_detected": False,
+        }
+
+    prob_over_raw = float(simulation_result.get("probability_over", 0.5))
+    sim_results_array = simulation_result.get("simulated_results", [])
+
+    all_lines = [float(v) for v in platform_lines.values() if v is not None]
+    consensus = sum(all_lines) / len(all_lines) if all_lines else None
+    line_spread = max(all_lines) - min(all_lines) if len(all_lines) >= 2 else 0.0
+
+    platform_results = []
+    best_plat = None
+    best_edge = -999.0
+    worst_plat = None
+    worst_edge = 999.0
+
+    for plat_name, plat_line in platform_lines.items():
+        if plat_line is None or float(plat_line) <= 0:
+            continue
+        plat_line = float(plat_line)
+
+        # Recompute probability for THIS platform's specific line
+        if sim_results_array:
+            import numpy as np
+            arr = np.array(sim_results_array, dtype=float)
+            p_over = float(np.mean(arr > plat_line))
+        else:
+            p_over = prob_over_raw
+
+        direction = "OVER" if p_over >= 0.5 else "UNDER"
+        model_prob = p_over if direction == "OVER" else (1.0 - p_over)
+
+        # Platform-specific breakeven
+        breakeven = _PLATFORM_BREAKEVEN.get(plat_name, 0.5238)
+        edge_pct = round((model_prob - breakeven) * 100.0, 2)
+
+        # Edge rating thresholds (as multiples of the per-stat minimum edge)
+        _STRONG_EDGE_MULTIPLIER = 2.0   # 2× the stat's minimum edge = "Strong"
+        _MODERATE_EDGE_MULTIPLIER = 1.0  # 1× the stat's minimum edge = "Moderate"
+        min_edge = STAT_EDGE_THRESHOLDS.get(stat_type, 3.0) if stat_type else 3.0
+        if edge_pct >= min_edge * _STRONG_EDGE_MULTIPLIER:
+            edge_rating = "Strong"
+        elif edge_pct >= min_edge * _MODERATE_EDGE_MULTIPLIER:
+            edge_rating = "Moderate"
+        elif edge_pct > 0:
+            edge_rating = "Weak"
+        else:
+            edge_rating = "None"
+
+        entry = {
+            "platform": plat_name,
+            "line": plat_line,
+            "direction": direction,
+            "model_probability": round(model_prob, 4),
+            "breakeven": round(breakeven, 4),
+            "edge_pct": edge_pct,
+            "has_edge": edge_pct > 0,
+            "edge_rating": edge_rating,
+        }
+        platform_results.append(entry)
+
+        if edge_pct > best_edge:
+            best_edge = edge_pct
+            best_plat = plat_name
+        if edge_pct < worst_edge:
+            worst_edge = edge_pct
+            worst_plat = plat_name
+
+    # Sort by edge descending (best platform first)
+    platform_results.sort(key=lambda p: p["edge_pct"], reverse=True)
+
+    mispricing = line_spread >= 1.0 and best_edge > 0 and worst_edge <= 0
+
+    return {
+        "platforms": platform_results,
+        "best_platform": best_plat,
+        "best_edge_pct": _safe_float(best_edge, 0.0),
+        "worst_platform": worst_plat,
+        "consensus_line": _safe_float(round(consensus, 2), 0.0) if consensus else None,
+        "line_spread": _safe_float(round(line_spread, 2), 0.0),
+        "mispricing_detected": mispricing,
+    }
+# ============================================================
+# END SECTION: Cross-Platform Edge Detection
+# ============================================================

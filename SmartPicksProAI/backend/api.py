@@ -1850,7 +1850,10 @@ def generate_daily_slate(
         compute_season_averages,
         get_stat_std_from_logs,
     )
-    from engine.edge_detection import analyze_directional_forces
+    from engine.edge_detection import (
+        analyze_directional_forces,
+        detect_cross_platform_edge,
+    )
     from engine.projections import build_player_projection
     from engine.simulation import run_enhanced_simulation
 
@@ -1961,17 +1964,18 @@ def generate_daily_slate(
                     if stat_type not in STAT_TYPE_TO_DB_COL:
                         continue
 
-                    # Get the prop line: first try cached odds, then projection
+                    # Get the prop line: try ALL platforms, then projection
                     prop_line: float | None = None
                     platform_lines_for_stat: dict[str, float] | None = None
                     try:
                         import odds_client
                         with _db() as odds_conn:
-                            platform_lines_for_stat = odds_client.get_cached_player_lines(
+                            # Aggregate lines from sportsbooks + PrizePicks + Underdog
+                            platform_lines_for_stat = odds_client.get_all_platform_lines(
                                 odds_conn, player_id, stat_type,
                             ) or None
                             if platform_lines_for_stat:
-                                # Use consensus as the primary line
+                                # Use cross-platform consensus as the primary line
                                 prop_line = sum(platform_lines_for_stat.values()) / len(
                                     platform_lines_for_stat
                                 )
@@ -2091,7 +2095,20 @@ def generate_daily_slate(
                     conf_score = float(confidence.get("confidence_score", 50.0))
                     composite = round(edge_pct * conf_score / 100.0, 4)
 
-                    all_picks.append({
+                    # Cross-platform edge analysis
+                    cross_platform_edge: dict | None = None
+                    if platform_lines_for_stat and len(platform_lines_for_stat) >= 1:
+                        try:
+                            cross_platform_edge = detect_cross_platform_edge(
+                                platform_lines=platform_lines_for_stat,
+                                model_projection=projected_avg,
+                                simulation_result=sim_result,
+                                stat_type=stat_type,
+                            )
+                        except Exception:
+                            pass
+
+                    pick_entry: dict = {
                         "player_id": player_id,
                         "player_name": player_data.get("name", ""),
                         "team": team_abbrev,
@@ -2107,7 +2124,17 @@ def generate_daily_slate(
                         "tier": confidence.get("tier", "Bronze"),
                         "composite_score": composite,
                         "has_live_odds": platform_lines_for_stat is not None,
-                    })
+                        "platforms_available": list(platform_lines_for_stat.keys()) if platform_lines_for_stat else [],
+                    }
+
+                    if cross_platform_edge:
+                        pick_entry["best_platform"] = cross_platform_edge.get("best_platform")
+                        pick_entry["best_edge_pct"] = cross_platform_edge.get("best_edge_pct", 0.0)
+                        pick_entry["line_spread"] = cross_platform_edge.get("line_spread", 0.0)
+                        pick_entry["mispricing_detected"] = cross_platform_edge.get("mispricing_detected", False)
+                        pick_entry["platform_edges"] = cross_platform_edge.get("platforms", [])
+
+                    all_picks.append(pick_entry)
 
     # ── Sort by composite score and return top N ───────────────────
     all_picks.sort(key=lambda p: p["composite_score"], reverse=True)
@@ -2136,6 +2163,43 @@ def refresh_odds_endpoint() -> dict:
             odds_client.ensure_prop_lines_table(conn)
             n = odds_client.fetch_todays_odds(conn)
         return {"status": "ok", "rows_cached": n}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/refresh-prizepicks")
+def refresh_prizepicks_endpoint() -> dict:
+    """Manually trigger a refresh of PrizePicks NBA prop lines."""
+    try:
+        import prizepicks_client
+        with _db() as conn:
+            n = prizepicks_client.fetch_prizepicks_props(conn)
+        return {"status": "ok", "platform": "PrizePicks", "rows_cached": n}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/refresh-underdog")
+def refresh_underdog_endpoint() -> dict:
+    """Manually trigger a refresh of Underdog Fantasy NBA pick'em lines."""
+    try:
+        import underdog_client
+        with _db() as conn:
+            n = underdog_client.fetch_underdog_props(conn)
+        return {"status": "ok", "platform": "Underdog Fantasy", "rows_cached": n}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/refresh-all-odds")
+def refresh_all_odds_endpoint() -> dict:
+    """Refresh odds from ALL platforms (The Odds API + PrizePicks + Underdog)."""
+    try:
+        import odds_client
+        with _db() as conn:
+            odds_client.ensure_prop_lines_table(conn)
+            results = odds_client.fetch_all_platform_odds(conn)
+        return {"status": "ok", "platforms": results, "total": sum(results.values())}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -2176,20 +2240,190 @@ def get_team_injuries(team_abbrev: str) -> dict:
 
 @app.get("/api/odds/player/{player_id}")
 def get_player_odds(player_id: int, stat_type: str = "points") -> dict:
-    """Return cached prop lines for a player + stat type."""
+    """Return cached prop lines for a player + stat type from ALL platforms."""
     try:
         import odds_client
         with _db() as conn:
-            lines = odds_client.get_cached_player_lines(conn, player_id, stat_type)
-            consensus = odds_client.get_consensus_line(conn, player_id, stat_type)
+            # Traditional sportsbook lines
+            sportsbook_lines = odds_client.get_cached_player_lines(conn, player_id, stat_type)
+            sportsbook_consensus = odds_client.get_consensus_line(conn, player_id, stat_type)
+
+            # All platforms combined
+            all_lines = odds_client.get_all_platform_lines(conn, player_id, stat_type)
+            cross_consensus = odds_client.get_cross_platform_consensus(conn, player_id, stat_type)
+
         return {
             "player_id": player_id,
             "stat_type": stat_type,
-            "lines_by_book": lines,
-            "consensus_line": consensus,
+            "lines_by_book": sportsbook_lines,
+            "sportsbook_consensus": sportsbook_consensus,
+            "all_platform_lines": all_lines,
+            "cross_platform_consensus": cross_consensus,
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/odds/platforms/{player_id}")
+def get_cross_platform_comparison(
+    player_id: int,
+    stat_type: str = "points",
+) -> dict:
+    """Return a cross-platform edge comparison for a player + stat.
+
+    Fetches lines from all platforms (sportsbooks + PrizePicks + Underdog),
+    runs the simulation, and evaluates edge against each platform's line
+    independently.  Useful for finding the best platform to place a bet.
+    """
+    from engine.data_adapter import (
+        STAT_TYPE_TO_DB_COL,
+        STAT_TYPE_TO_PROJECTION_KEY,
+        build_engine_defense_data,
+        build_engine_game_logs,
+        build_engine_player_data,
+        build_engine_teams_data,
+        get_stat_std_from_logs,
+    )
+    from engine.edge_detection import detect_cross_platform_edge
+    from engine.projections import build_player_projection
+    from engine.simulation import run_enhanced_simulation
+
+    today_str = date.today().isoformat()
+
+    # 1. Get all platform lines
+    try:
+        import odds_client
+        with _db() as conn:
+            all_lines = odds_client.get_all_platform_lines(conn, player_id, stat_type)
+    except Exception:
+        all_lines = {}
+
+    if not all_lines:
+        return {
+            "player_id": player_id,
+            "stat_type": stat_type,
+            "message": "No lines found across any platform.",
+            "platforms": [],
+        }
+
+    # 2. Build projection & run simulation
+    player_row = _query_one(
+        "SELECT * FROM Players WHERE player_id = ?",
+        (player_id,),
+        label="xplat/player",
+    )
+    if not player_row:
+        raise HTTPException(status_code=404, detail=f"Player {player_id} not found.")
+
+    team_abbrev = player_row.get("team_abbreviation", "")
+
+    # Find today's opponent
+    game_row = _query_one(
+        """
+        SELECT home_abbrev, away_abbrev FROM Games
+        WHERE game_date = ? AND (home_abbrev = ? OR away_abbrev = ?)
+        """,
+        (today_str, team_abbrev, team_abbrev),
+        label="xplat/game",
+    )
+    if not game_row:
+        raise HTTPException(status_code=404, detail="No game today for this player's team.")
+
+    is_home = game_row.get("home_abbrev") == team_abbrev
+    opp_abbrev = game_row.get("away_abbrev") if is_home else game_row.get("home_abbrev")
+
+    season_logs = _query_rows(
+        """
+        SELECT l.*, g.game_date, g.matchup, g.home_abbrev, g.away_abbrev
+        FROM Player_Game_Logs l
+        JOIN Games g ON g.game_id = l.game_id
+        WHERE l.player_id = ?
+        ORDER BY g.game_date DESC
+        LIMIT ?
+        """,
+        (player_id, MAX_SEASON_GAMES),
+        label="xplat/logs",
+    )
+
+    if len(season_logs) < _SLATE_MIN_GAMES_FOR_ANALYSIS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not enough game logs ({len(season_logs)}/{_SLATE_MIN_GAMES_FOR_ANALYSIS}) for analysis.",
+        )
+
+    engine_logs = build_engine_game_logs(season_logs)
+    player_data = build_engine_player_data(player_row, engine_logs)
+    recent_5 = engine_logs[:5]
+
+    teams_raw = _query_rows("SELECT * FROM Teams", label="xplat/teams")
+    teams_data = build_engine_teams_data(teams_raw)
+    defense_raw = _query_rows(
+        "SELECT * FROM Defense_Vs_Position WHERE team_abbreviation = ?",
+        (opp_abbrev,),
+        label="xplat/defense",
+    )
+    defense_data = build_engine_defense_data(defense_raw)
+    rest_days = _compute_rest_days(team_abbrev)
+
+    try:
+        projection = build_player_projection(
+            player_data=player_data,
+            opponent_team_abbreviation=opp_abbrev,
+            is_home_game=is_home,
+            rest_days=rest_days,
+            game_total=_SLATE_DEFAULT_GAME_TOTAL,
+            defensive_ratings_data=defense_data,
+            teams_data=teams_data,
+            recent_form_games=recent_5,
+            vegas_spread=_SLATE_DEFAULT_VEGAS_SPREAD,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Projection error: {exc}") from exc
+
+    proj_key = STAT_TYPE_TO_PROJECTION_KEY.get(stat_type, f"projected_{stat_type}")
+    projected_avg = float(projection.get(proj_key, 0) or 0)
+    stat_std = get_stat_std_from_logs(season_logs, stat_type)
+    recent_values = [
+        float(g.get(STAT_TYPE_TO_DB_COL.get(stat_type, stat_type)) or 0)
+        for g in engine_logs[:20]
+    ]
+
+    # Use consensus line for the simulation target
+    consensus_line = sum(all_lines.values()) / len(all_lines)
+
+    try:
+        sim_result = run_enhanced_simulation(
+            projected_stat_average=projected_avg,
+            stat_standard_deviation=stat_std,
+            prop_line=consensus_line,
+            blowout_risk_factor=float(projection.get("blowout_risk", 0.15)),
+            pace_adjustment_factor=float(projection.get("pace_factor", 1.0)),
+            matchup_adjustment_factor=float(projection.get("defense_factor", 1.0)),
+            home_away_adjustment=float(projection.get("home_away_factor", 0.0)),
+            rest_adjustment_factor=float(projection.get("rest_factor", 1.0)),
+            stat_type=stat_type,
+            recent_game_logs=(recent_values if len(recent_values) >= 10 else None),
+            vegas_spread=_SLATE_DEFAULT_VEGAS_SPREAD,
+            game_total=_SLATE_DEFAULT_GAME_TOTAL,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Simulation error: {exc}") from exc
+
+    # 3. Cross-platform edge detection
+    xplat_result = detect_cross_platform_edge(
+        platform_lines=all_lines,
+        model_projection=projected_avg,
+        simulation_result=sim_result,
+        stat_type=stat_type,
+    )
+
+    return {
+        "player_id": player_id,
+        "player_name": player_data.get("name", ""),
+        "stat_type": stat_type,
+        "projected_value": round(projected_avg, 2),
+        "cross_platform_analysis": xplat_result,
+    }
 
 
 # ---------------------------------------------------------------------------
