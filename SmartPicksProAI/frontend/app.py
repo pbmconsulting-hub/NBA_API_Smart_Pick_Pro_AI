@@ -44,6 +44,7 @@ from tracking.bet_tracker import (
     auto_log_analysis_bets,
     get_model_performance_stats,
     log_new_bet,
+    normalize_platform,
     record_bet_result,
     VALID_PLATFORMS,
 )

@@ -2460,6 +2460,27 @@ def train_models_endpoint():
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.get("/api/dfs/lines")
+def get_dfs_lines_endpoint(player_id: int, stat_type: str = "points") -> dict:
+    """Return DFS platform prop lines and consensus for a player + stat type."""
+    try:
+        import odds_client
+        with _db() as conn:
+            all_lines = odds_client.get_all_platform_lines(conn, player_id, stat_type)
+            if all_lines:
+                consensus = sum(all_lines.values()) / len(all_lines)
+            else:
+                consensus = None
+        return {
+            "player_id": player_id,
+            "stat_type": stat_type,
+            "lines": all_lines,
+            "consensus": consensus,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

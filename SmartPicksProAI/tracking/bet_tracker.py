@@ -26,7 +26,20 @@ from tracking.database import (
 # Valid constants
 VALID_DIRECTIONS = {"OVER", "UNDER"}
 VALID_RESULTS = {"win", "loss", "push"}
-VALID_PLATFORMS = {"PrizePicks", "Underdog Fantasy", "DraftKings Pick6"}
+VALID_PLATFORMS = {"PrizePicks", "Underdog Fantasy", "DraftKings Pick6", "FanDuel"}
+
+# Mapping from lowercase frontend keys to canonical platform names.
+_PLATFORM_ALIAS: dict[str, str] = {
+    "prizepicks": "PrizePicks",
+    "underdog": "Underdog Fantasy",
+    "draftkings": "DraftKings Pick6",
+    "fanduel": "FanDuel",
+}
+
+
+def normalize_platform(raw: str) -> str:
+    """Return the canonical platform name, or the original string."""
+    return _PLATFORM_ALIAS.get(raw.lower().strip(), raw)
 
 
 def log_new_bet(
@@ -63,6 +76,9 @@ def log_new_bet(
         return {"success": False, "error": "Prop line must be a number."}
     if prop_line <= 0:
         return {"success": False, "error": "Prop line must be positive."}
+
+    # Normalize platform alias (e.g. "prizepicks" → "PrizePicks")
+    platform = normalize_platform(platform)
 
     if not bet_date:
         bet_date = datetime.date.today().isoformat()
