@@ -57,6 +57,7 @@ from tracking.database import (
 from api_service import (
     analyze_prop,
     get_defense_vs_position,
+    get_dfs_lines,
     get_game_box_score,
     get_game_rotation,
     get_league_dash_players,
@@ -102,8 +103,8 @@ MAX_GAME_COLUMNS = 4
 MAX_RECENT_GAMES = 20
 MAX_SEARCH_RESULTS = 10
 
-# Example bankroll used for display purposes only (not financial advice).
-EXAMPLE_BANKROLL = 500.0
+# Default bankroll used when user has not set one (not financial advice).
+_DEFAULT_BANKROLL = 500.0
 
 st.set_page_config(
     page_title="Smart Pick Pro — NBA Edition",
@@ -125,6 +126,8 @@ _DEFAULT_STATE: dict[str, Any] = {
     "selected_player_id": None,
     "selected_team_id": None,
     "game_context": {},
+    "user_bankroll": _DEFAULT_BANKROLL,
+    "last_analysis": None,
 }
 for _key, _default in _DEFAULT_STATE.items():
     if _key not in st.session_state:
@@ -274,6 +277,22 @@ with st.sidebar:
                     st.rerun()
         else:
             st.caption("No players found.")
+
+    st.divider()
+
+    # ── Bankroll Setting ──────────────────────────────────────
+    st.markdown(
+        '<div class="section-hdr">Bankroll</div>',
+        unsafe_allow_html=True,
+    )
+    st.session_state.user_bankroll = st.number_input(
+        "Your bankroll ($)",
+        min_value=10.0,
+        value=float(st.session_state.user_bankroll),
+        step=50.0,
+        key="sidebar_bankroll",
+        help="Used for Kelly bet sizing. Not financial advice.",
+    )
 
     st.divider()
 
@@ -1234,12 +1253,18 @@ Boston.
         ]
 
         if selected_dvp == "All Teams":
-            all_dvp = []
-            for t in dvp_teams:
-                positions = get_defense_vs_position(t["abbreviation"])
-                for p in positions:
-                    p["team"] = t["abbreviation"]
-                    all_dvp.append(p)
+            # Cache the combined DVP list in session_state to avoid 30 API calls on every rerun
+            _dvp_cache_key = "dvp_all_teams_cache"
+            if _dvp_cache_key not in st.session_state:
+                all_dvp = []
+                with st.spinner("Loading defense data for all teams…"):
+                    for t in dvp_teams:
+                        positions = get_defense_vs_position(t["abbreviation"])
+                        for p in positions:
+                            p["team"] = t["abbreviation"]
+                            all_dvp.append(p)
+                st.session_state[_dvp_cache_key] = all_dvp
+            all_dvp = st.session_state[_dvp_cache_key]
             if all_dvp:
                 df_dvp = pd.DataFrame(all_dvp)
                 if pos_filter != "All Positions":
@@ -1378,7 +1403,18 @@ def _page_prop_analyzer() -> None:
                 st.info("No players found.")
 
         stat_type = st.selectbox("Stat type", _ANALYSIS_STAT_TYPES, key="prop_stat_type")
-        prop_line = st.number_input("Prop line", min_value=0.5, value=20.5, step=0.5, key="prop_line_input")
+
+        # Auto-populate prop line from DFS platforms when player is selected
+        _default_line = 20.5
+        if selected_player:
+            _pid = selected_player.get("player_id")
+            if _pid:
+                _dfs = get_dfs_lines(int(_pid), stat_type)
+                if _dfs.get("consensus"):
+                    _default_line = round(float(_dfs["consensus"]) * 2) / 2  # nearest 0.5
+                    st.caption(f"Auto-filled from DFS platforms: {_default_line}")
+
+        prop_line = st.number_input("Prop line", min_value=0.5, value=_default_line, step=0.5, key="prop_line_input")
 
         st.divider()
         st.subheader("⚙️ Game Context")
@@ -1398,48 +1434,68 @@ def _page_prop_analyzer() -> None:
         run_analysis = st.button("🚀 Analyze Prop", type="primary", use_container_width=True)
 
     # ── Main content area ───────────────────────────────────────────
+    # Show cached result when no new analysis was triggered
     if not run_analysis:
-        st.info("👈 Configure a prop in the sidebar and click **Analyze Prop** to begin.")
-        return
+        cached = st.session_state.get("last_analysis")
+        if cached and cached.get("confidence"):
+            result = cached
+            # Recover inputs from cached result for display
+            player_id = result.get("player_id")
+            player_name = result.get("player_name", "")
+            stat_type = result.get("stat_type", stat_type)
+            prop_line = result.get("prop_line", prop_line)
+            platform = result.get("platform", platform)
+        else:
+            st.info("👈 Configure a prop in the sidebar and click **Analyze Prop** to begin.")
+            return
+    else:
+        # New analysis requested
+        if not selected_player:
+            st.warning("Please search for and select a player first.")
+            return
 
-    if not selected_player:
-        st.warning("Please search for and select a player first.")
-        return
+        player_id = selected_player.get("player_id")
+        if not player_id:
+            st.error("Selected player has no ID.")
+            return
 
-    player_id = selected_player.get("player_id")
-    if not player_id:
-        st.error("Selected player has no ID.")
-        return
-
-    player_name = (
-        selected_player.get("full_name")
-        or f"{selected_player.get('first_name', '')} {selected_player.get('last_name', '')}".strip()
-    )
-
-    with st.spinner(f"Analyzing {player_name} — {stat_type} {prop_line}…"):
-        result = analyze_prop(
-            player_id=int(player_id),
-            stat_type=stat_type,
-            prop_line=float(prop_line),
-            opponent=opponent,
-            vegas_spread=float(vegas_spread),
-            game_total=float(game_total),
-            platform=platform,
+        player_name = (
+            selected_player.get("full_name")
+            or f"{selected_player.get('first_name', '')} {selected_player.get('last_name', '')}".strip()
         )
 
-    if result.get("status") == "error":
-        st.error(f"Analysis failed: {result.get('message', 'Unknown error')}")
-        return
+        with st.spinner(f"Analyzing {player_name} — {stat_type} {prop_line}…"):
+            result = analyze_prop(
+                player_id=int(player_id),
+                stat_type=stat_type,
+                prop_line=float(prop_line),
+                opponent=opponent,
+                vegas_spread=float(vegas_spread),
+                game_total=float(game_total),
+                platform=platform,
+            )
 
-    if "confidence" not in result:
-        st.error("Unexpected response from the analysis engine.")
-        return
+        if result.get("status") == "error":
+            st.error(f"Analysis failed: {result.get('message', 'Unknown error')}")
+            return
 
-    # ── Auto-log to bet tracker ──────────────────────────────
-    try:
-        auto_log_analysis_bets(result, platform=platform)
-    except Exception:
-        pass  # Never block UI for tracking errors
+        if "confidence" not in result:
+            st.error("Unexpected response from the analysis engine.")
+            return
+
+        # Store successful result for session persistence (Fix #1)
+        result["player_id"] = int(player_id)
+        result["player_name"] = player_name
+        result["stat_type"] = stat_type
+        result["prop_line"] = float(prop_line)
+        result["platform"] = platform
+        st.session_state["last_analysis"] = result
+
+        # ── Auto-log to bet tracker ──────────────────────────────
+        try:
+            auto_log_analysis_bets(result, platform=platform)
+        except Exception:
+            pass  # Never block UI for tracking errors
 
     # ── Extract core data ───────────────────────────────────────────
     conf = result.get("confidence", {})
@@ -1501,9 +1557,10 @@ def _page_prop_analyzer() -> None:
     qm[4].metric("Kelly Size", kelly_pct)
 
     # ── Tabbed Sections ─────────────────────────────────────────────
-    tab_info, tab_pred, tab_bet = st.tabs([
+    tab_info, tab_pred, tab_sim, tab_bet = st.tabs([
         "📋 Player Info & Stats",
         "🔮 Predictions & Analysis",
+        "📊 Simulation Chart",
         "💰 Bet Sizing & Verdict",
     ])
 
@@ -1735,7 +1792,62 @@ def _page_prop_analyzer() -> None:
                     st.markdown(f"**{key.replace('_', ' ').title()}:** {text}")
 
     # ══════════════════════════════════════════════════════════════
-    # TAB 3: Bet Sizing & Verdict
+    # TAB 3: Simulation Chart
+    # ══════════════════════════════════════════════════════════════
+    with tab_sim:
+        st.subheader("📊 Simulation Distribution")
+        # Build a histogram from simulation percentiles / distribution data
+        sim_distribution = sim.get("distribution", [])
+        sim_mean = sim.get("simulated_mean", 0)
+        if sim_distribution:
+            import numpy as np
+            sim_arr = np.array(sim_distribution, dtype=float)
+            # Create histogram data
+            hist_counts, bin_edges = np.histogram(sim_arr, bins=40)
+            bin_centers = [(bin_edges[i] + bin_edges[i + 1]) / 2 for i in range(len(hist_counts))]
+            hist_df = pd.DataFrame({"Stat Value": bin_centers, "Frequency": hist_counts})
+            st.bar_chart(hist_df, x="Stat Value", y="Frequency", use_container_width=True)
+            st.markdown(
+                f"**Prop Line:** {prop_line} &nbsp;|&nbsp; "
+                f"**Simulated Mean:** {sim_mean:.1f} &nbsp;|&nbsp; "
+                f"**P(Over):** {sim.get('probability_over', 0):.1%}"
+            )
+        elif sim_mean > 0:
+            # Fallback: generate approximate distribution from percentiles
+            p10 = sim.get("percentile_10", sim_mean * 0.7)
+            p50 = sim.get("percentile_50", sim_mean)
+            p90 = sim.get("percentile_90", sim_mean * 1.3)
+            import numpy as np
+            # Approximate distribution using normal fit from percentiles
+            std_est = max((p90 - p10) / 2.56, 1.0)  # 10th-90th span ≈ 2.56σ
+            sim_arr = np.random.normal(loc=sim_mean, scale=std_est, size=5000)
+            sim_arr = np.clip(sim_arr, 0, None)
+            hist_counts, bin_edges = np.histogram(sim_arr, bins=40)
+            bin_centers = [(bin_edges[i] + bin_edges[i + 1]) / 2 for i in range(len(hist_counts))]
+            hist_df = pd.DataFrame({"Stat Value": bin_centers, "Frequency": hist_counts})
+            st.bar_chart(hist_df, x="Stat Value", y="Frequency", use_container_width=True)
+            st.caption("Distribution approximated from simulation percentiles.")
+            st.markdown(
+                f"**Prop Line:** {prop_line} &nbsp;|&nbsp; "
+                f"**Simulated Mean:** {sim_mean:.1f} &nbsp;|&nbsp; "
+                f"**P(Over):** {sim.get('probability_over', 0):.1%}"
+            )
+        else:
+            st.info("No simulation data available for charting.")
+
+        # Key metrics below chart
+        st.divider()
+        sim_cols = st.columns([1, 1, 1, 1])
+        sim_cols[0].metric("Simulated Mean", f"{sim.get('simulated_mean', 0):.1f}")
+        sim_cols[1].metric("P(Over)", f"{sim.get('probability_over', 0):.1%}")
+        sim_cols[2].metric(
+            "90% CI",
+            f"{sim.get('ci_90_low', 0):.1f} – {sim.get('ci_90_high', 0):.1f}",
+        )
+        sim_cols[3].metric("Sims Run", sim.get("simulations_run", 0))
+
+    # ══════════════════════════════════════════════════════════════
+    # TAB 4: Bet Sizing & Verdict
     # ══════════════════════════════════════════════════════════════
     with tab_bet:
         # Joseph M Smith's verdict (prominent in this tab)
@@ -1760,11 +1872,12 @@ def _page_prop_analyzer() -> None:
             "Payout",
             f"{bankroll.get('payout_multiplier', 1.909):.3f}x",
         )
+        _bankroll = st.session_state.user_bankroll
         if kelly_frac > 0:
-            example_bet = round(kelly_frac * EXAMPLE_BANKROLL, 2)
-            bet_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", f"${example_bet:.2f}")
+            example_bet = round(kelly_frac * _bankroll, 2)
+            bet_cols[3].metric(f"${_bankroll:.0f} Bankroll →", f"${example_bet:.2f}")
         else:
-            bet_cols[3].metric(f"${EXAMPLE_BANKROLL:.0f} Bankroll →", "No bet")
+            bet_cols[3].metric(f"${_bankroll:.0f} Bankroll →", "No bet")
 
         # Risk factors
         risk_factors = explanation.get("risk_factors", [])
@@ -1794,7 +1907,7 @@ def _page_prop_analyzer() -> None:
                 "confidence_score": score,
                 "tier": tier,
                 "kelly_fraction": kelly_frac,
-                "recommended_bet": round(kelly_frac * EXAMPLE_BANKROLL, 2),
+                "recommended_bet": round(kelly_frac * st.session_state.user_bankroll, 2),
                 "regime_flag": regime_dir,
                 "platform": platform,
                 "vegas_spread": float(vegas_spread),
@@ -1849,14 +1962,22 @@ def _page_pick_history() -> None:
     pending = total - hits - misses - pushes
     decided = hits + misses
     win_rate = (hits / decided * 100) if decided > 0 else 0.0
+    # Estimated ROI at standard -110 juice (payout = 0.909 per unit risked)
+    roi = ((hits * 0.909 - misses) / decided * 100) if decided > 0 else 0.0
 
-    sum_cols = st.columns(6)
+    sum_cols = st.columns(7)
     sum_cols[0].metric("Total Picks", total)
     sum_cols[1].metric("Hits", f"✅ {hits}")
     sum_cols[2].metric("Misses", f"❌ {misses}")
     sum_cols[3].metric("Pushes", f"➖ {pushes}")
     sum_cols[4].metric("Pending", f"⏳ {pending}")
     sum_cols[5].metric("Win Rate", f"{win_rate:.1f}%" if decided > 0 else "N/A")
+    sum_cols[6].metric(
+        "Est. ROI (-110)",
+        f"{roi:+.1f}%" if decided > 0 else "N/A",
+        delta="Profit" if roi > 0 else ("Loss" if roi < 0 else "Break Even"),
+        delta_color="normal" if roi > 0 else ("inverse" if roi < 0 else "off"),
+    )
 
     # ── Tier breakdown ──────────────────────────────────────────────
     if decided > 0:
@@ -1890,10 +2011,47 @@ def _page_pick_history() -> None:
 
     st.divider()
 
-    # ── Pick table ──────────────────────────────────────────────────
+    # ── Filter controls ────────────────────────────────────────────
     st.subheader("🗂️ All Picks")
 
-    for pick in picks:
+    all_tiers = sorted({p.get("tier", "Bronze") for p in picks})
+    all_stats = sorted({p.get("stat_type", "?") for p in picks})
+    result_options = ["All", "Pending", "Hit", "Miss", "Push"]
+
+    col_tier, col_stat, col_result = st.columns(3)
+    filter_tier = col_tier.selectbox(
+        "Filter by Tier",
+        ["All"] + all_tiers,
+        key="ph_filter_tier",
+    )
+    filter_stat = col_stat.selectbox(
+        "Filter by Stat",
+        ["All"] + all_stats,
+        key="ph_filter_stat",
+    )
+    filter_result = col_result.selectbox(
+        "Filter by Result",
+        result_options,
+        key="ph_filter_result",
+    )
+
+    # Apply filters
+    _result_map = {"Hit": "hit", "Miss": "miss", "Push": "push", "Pending": None}
+    filtered = picks
+    if filter_tier != "All":
+        filtered = [p for p in filtered if p.get("tier", "Bronze") == filter_tier]
+    if filter_stat != "All":
+        filtered = [p for p in filtered if p.get("stat_type", "?") == filter_stat]
+    if filter_result != "All":
+        if filter_result == "Pending":
+            filtered = [p for p in filtered if not p.get("result")]
+        else:
+            filtered = [p for p in filtered if p.get("result") == _result_map.get(filter_result)]
+
+    if not filtered:
+        st.info("No picks match the current filters.")
+
+    for pick in filtered:
         pick_id = pick.get("pick_id", "?")
         p_name = pick.get("player_name", "Unknown")
         p_tier = pick.get("tier", "Bronze")
@@ -1909,6 +2067,7 @@ def _page_pick_history() -> None:
         p_regime = pick.get("regime_flag", "stable")
 
         tier_emoji = _TIER_EMOJI.get(p_tier, "🥉")
+        tier_color = _TIER_COLORS.get(p_tier, "#C0C0C0")
         result_emoji = _RESULT_EMOJI.get(p_result, "⏳") if p_result else "⏳"
         dir_icon = "🟢" if p_dir == "OVER" else "🔴"
 
@@ -1917,6 +2076,11 @@ def _page_pick_history() -> None:
             f"{dir_icon} {p_dir} {p_line}  •  vs {p_opp}  •  {p_date}",
             expanded=False,
         ):
+            # Tier color bar
+            st.markdown(
+                f'<div style="height:4px;background:{tier_color};border-radius:2px;margin-bottom:8px"></div>',
+                unsafe_allow_html=True,
+            )
             det_cols = st.columns([1, 1, 1, 1, 1])
             det_cols[0].metric("Confidence", f"{p_conf:.0f}/100")
             det_cols[1].metric("Edge", f"{p_edge:+.1f}%")
@@ -2001,6 +2165,7 @@ def _page_bet_tracker() -> None:
 
                 dir_icon = "🟢" if direction == "OVER" else "🔴"
                 tier_emoji = {"Platinum": "💎", "Gold": "🥇", "Silver": "🥈", "Bronze": "🥉"}.get(tier, "")
+                tier_color = _TIER_COLORS.get(tier, "#C0C0C0")
                 result_emoji = {"win": "✅", "loss": "❌", "push": "➖"}.get(result_val, "⏳")
 
                 with st.expander(
@@ -2008,6 +2173,11 @@ def _page_bet_tracker() -> None:
                     f"{dir_icon} {direction} {line}  •  vs {opp}  •  {bet_date}",
                     expanded=False,
                 ):
+                    # Tier color bar
+                    st.markdown(
+                        f'<div style="height:4px;background:{tier_color};border-radius:2px;margin-bottom:8px"></div>',
+                        unsafe_allow_html=True,
+                    )
                     det = st.columns([1, 1, 1, 1, 1])
                     det[0].metric("Confidence", f"{score:.0f}/100")
                     det[1].metric("Edge", f"{edge:+.1f}%")
