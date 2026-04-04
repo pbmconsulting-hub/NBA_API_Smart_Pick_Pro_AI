@@ -65,16 +65,8 @@ try:
     from SmartPicksProAI.frontend.api_service import (
         get_todays_games,
         get_recent_games,
-        search_players,
         get_todays_slate,
         trigger_refresh,
-        get_teams,
-        get_team_roster,
-        get_team_stats,
-        get_defense_vs_position,
-        get_standings,
-        get_league_leaders,
-        get_player_last5,
     )
     _API_AVAILABLE = True
 except ImportError:

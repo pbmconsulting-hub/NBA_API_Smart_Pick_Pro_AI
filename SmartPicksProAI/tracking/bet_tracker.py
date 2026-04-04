@@ -10,7 +10,6 @@ import logging
 _logger = logging.getLogger(__name__)
 
 from tracking.database import (
-    initialize_database,
     insert_bet,
     update_bet_result,
     load_all_bets,
@@ -19,8 +18,6 @@ from tracking.database import (
     get_performance_by_stat,
     get_performance_by_platform,
     insert_analysis_pick,
-    load_analysis_picks,
-    delete_bet,
 )
 
 # Valid constants
@@ -69,7 +66,7 @@ def log_new_bet(
         return {"success": False, "error": "Stat type is required."}
     direction = direction.upper().strip()
     if direction not in VALID_DIRECTIONS:
-        return {"success": False, "error": f"Direction must be OVER or UNDER."}
+        return {"success": False, "error": "Direction must be OVER or UNDER."}
     try:
         prop_line = float(prop_line)
     except (TypeError, ValueError):
@@ -112,7 +109,7 @@ def record_bet_result(bet_id: int, result: str, actual_value: float | None = Non
     """Record the result for a bet."""
     result_lower = result.lower().strip()
     if result_lower not in VALID_RESULTS:
-        return {"success": False, "error": f"Result must be win, loss, or push."}
+        return {"success": False, "error": "Result must be win, loss, or push."}
     success = update_bet_result(bet_id, result_lower, actual_value)
     if success:
         return {"success": True}

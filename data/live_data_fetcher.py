@@ -37,7 +37,6 @@ try:
     from nba_api.stats.endpoints import (
         ScoreboardV2,
         BoxScoreTraditionalV2,
-        LeagueGameLog,
         CommonPlayerInfo,
         PlayerGameLog,
         TeamGameLog,
@@ -166,8 +165,6 @@ def fetch_box_score(game_id: str) -> dict[str, Any]:
                 "ftm": row.get("FTM", 0),
                 "fta": row.get("FTA", 0),
             }
-            # Use start_period to determine home/away
-            start_period = row.get("START_POSITION", "")
             result.setdefault("all_players", []).append(player)
 
         return result

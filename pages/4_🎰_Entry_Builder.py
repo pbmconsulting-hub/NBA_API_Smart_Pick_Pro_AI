@@ -19,7 +19,7 @@ import pandas as pd
 st.set_page_config(page_title="Entry Builder", page_icon="🎰", layout="wide")
 
 try:
-    from SmartPicksProAI.engine.entry_optimizer import (
+    from SmartPicksProAI.engine.entry_optimizer import (  # noqa: F401
         optimize_entry,
         validate_entry,
         PLATFORM_CONFIGS,
@@ -116,8 +116,8 @@ with tab_build:
         df = pd.DataFrame(legs)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        avg_conf = sum(l["confidence"] for l in legs) / len(legs)
-        avg_edge = sum(l["edge_pct"] for l in legs) / len(legs)
+        avg_conf = sum(leg["confidence"] for leg in legs) / len(legs)
+        avg_edge = sum(leg["edge_pct"] for leg in legs) / len(legs)
         m_cols = st.columns(3)
         m_cols[0].metric("Legs", len(legs))
         m_cols[1].metric("Avg Confidence", f"{avg_conf:.0f}")
@@ -179,7 +179,7 @@ with tab_optimize:
                     st.error(result.get("error", "Optimization failed."))
             else:
                 # Fallback: simple filtering without optimizer
-                filtered = [l for l in legs if l["confidence"] >= min_conf]
+                filtered = [leg for leg in legs if leg["confidence"] >= min_conf]
                 filtered.sort(key=lambda x: x["confidence"], reverse=True)
                 selected = filtered[:max_legs]
                 if selected:

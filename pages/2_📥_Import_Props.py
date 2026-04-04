@@ -17,8 +17,6 @@ for _p in (_ROOT, _ROOT / "SmartPicksProAI", _ROOT / "SmartPicksProAI" / "fronte
 
 import streamlit as st
 import pandas as pd
-import csv
-import io
 
 st.set_page_config(page_title="Import Props", page_icon="📥", layout="wide")
 

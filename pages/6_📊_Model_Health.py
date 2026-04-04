@@ -163,7 +163,7 @@ with tab_drift:
         if recent_acc is not None and longer_acc is not None:
             drift = (recent_acc - longer_acc) * 100
             d_cols = st.columns(3)
-            d_cols[0].metric(f"Last 14 Days", f"{recent_acc:.1%}")
+            d_cols[0].metric("Last 14 Days", f"{recent_acc:.1%}")
             d_cols[1].metric(f"Last {days} Days", f"{longer_acc:.1%}")
             d_cols[2].metric("Drift", f"{drift:+.1f}pp")
 

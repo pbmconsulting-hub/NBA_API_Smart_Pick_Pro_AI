@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import itertools
 import logging
-import math
 from typing import Any
 
 _logger = logging.getLogger(__name__)
@@ -140,7 +139,7 @@ def validate_entry(
 
     # Check duplicate players
     if not config["allow_same_player"]:
-        names = [l.get("player_name", "").lower() for l in legs]
+        names = [leg.get("player_name", "").lower() for leg in legs]
         seen: set[str] = set()
         for name in names:
             if name in seen:
@@ -189,8 +188,8 @@ def _score_combination(
     if not combo:
         return 0.0
 
-    avg_conf = sum(l.get("confidence", 0) for l in combo) / len(combo)
-    avg_edge = sum(l.get("edge_pct", 0) for l in combo) / len(combo)
+    avg_conf = sum(leg.get("confidence", 0) for leg in combo) / len(combo)
+    avg_edge = sum(leg.get("edge_pct", 0) for leg in combo) / len(combo)
     penalty = _correlation_penalty(list(combo))
 
     # Weighted score: confidence (40%) + edge (40%) - correlation (20%)
@@ -288,7 +287,7 @@ def optimize_entry(
     effective_max = min(max_legs, config["max_legs"])
 
     # Filter by minimum confidence
-    eligible = [l for l in legs if l.get("confidence", 0) >= min_confidence]
+    eligible = [leg for leg in legs if leg.get("confidence", 0) >= min_confidence]
 
     # Remove duplicates by player name
     seen_players: set[str] = set()
@@ -321,7 +320,7 @@ def optimize_entry(
         # If pool is large, limit combinations to avoid combinatorial explosion
         pool = unique_legs
         if len(pool) > 15:
-            pool = sorted(pool, key=lambda l: l.get("confidence", 0), reverse=True)[:15]
+            pool = sorted(pool, key=lambda x: x.get("confidence", 0), reverse=True)[:15]
 
         for combo in itertools.combinations(pool, n):
             score = _score_combination(combo, platform)
@@ -342,7 +341,7 @@ def optimize_entry(
     payout = config["payout_multipliers"].get(len(selected), 3.0)
     suggested_stake = _kelly_stake(win_prob, payout, bankroll, kelly_fraction)
 
-    combined_edge = sum(l.get("edge_pct", 0) for l in selected) / len(selected)
+    combined_edge = sum(leg.get("edge_pct", 0) for leg in selected) / len(selected)
 
     return {
         "success": True,
