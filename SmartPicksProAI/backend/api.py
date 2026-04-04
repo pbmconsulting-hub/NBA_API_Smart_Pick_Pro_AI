@@ -1754,7 +1754,7 @@ def get_todays_picks():
 
 @app.post("/api/admin/train-models")
 def train_models_endpoint():
-    """Trigger ML model training for all prop-relevant stats."""
+    """Trigger ML model training for all prop-relevant stats (pts, reb, ast, stl, blk, tov, fg3m, ftm)."""
     try:
         from engine.models.train import train_models
         results = {}

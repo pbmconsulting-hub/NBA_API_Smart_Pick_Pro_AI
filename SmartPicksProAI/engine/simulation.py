@@ -189,6 +189,11 @@ MOMENTUM_COLD_FLOOR = 0.88       # Minimum cold streak multiplier
 # This constant ensures consistency across _enrich_scenarios_from_context and
 # any future blowout-frequency calculations.
 _BLOWOUT_MARGIN_THRESHOLD = 15   # points
+# Pre-computed zero-inflated skew-normal constants (zi_skew = 2.0)
+_ZI_SKEW = 2.0
+_ZI_DELTA = _ZI_SKEW / math.sqrt(1.0 + _ZI_SKEW * _ZI_SKEW)
+_ZI_SQRT_1_MINUS_D2 = math.sqrt(1.0 - _ZI_DELTA * _ZI_DELTA)
+_ZI_SKEW_MEAN_SHIFT = _ZI_DELTA * math.sqrt(2.0 / math.pi)
 # ============================================================
 # END SECTION: Minutes Simulation Constants
 # ============================================================
@@ -507,7 +512,7 @@ def run_quantum_matrix_simulation(
     # END SECTION: Apply Pre-Simulation Adjustments
     # ============================================================
     # ============================================================
-    # SECTION: Run Simulation Loop (Vectorized with NumPy)
+    # SECTION: Vectorized Simulation (NumPy)
     # This is the heart of Quantum Matrix Engine 5.6 — simulate many games!
     # ============================================================
     n = number_of_simulations
@@ -624,16 +629,12 @@ def run_quantum_matrix_simulation(
         # Non-zero games use skew-normal with conditional mean
         conditional_means = effective_means / np.maximum(0.001, 1.0 - zero_prob)
         zi_stds = scaled_stds * 1.1
-        zi_skew = 2.0
 
-        # Vectorized skew-normal for non-zero games
-        delta = zi_skew / math.sqrt(1.0 + zi_skew * zi_skew)
-        sqrt_1_minus_d2 = math.sqrt(1.0 - delta * delta)
-        skew_mean_shift = delta * math.sqrt(2.0 / math.pi)
+        # Vectorized skew-normal for non-zero games (using precomputed constants)
         u0 = rng.standard_normal(n)
         v = rng.standard_normal(n)
-        z = delta * np.abs(u0) + sqrt_1_minus_d2 * v
-        raw_samples = conditional_means + zi_stds * (z - skew_mean_shift)
+        z = _ZI_DELTA * np.abs(u0) + _ZI_SQRT_1_MINUS_D2 * v
+        raw_samples = conditional_means + zi_stds * (z - _ZI_SKEW_MEAN_SHIFT)
         # Round to nearest 0.5
         raw_samples = np.round(raw_samples * 2.0) / 2.0
         raw_samples = np.maximum(0.0, raw_samples)
