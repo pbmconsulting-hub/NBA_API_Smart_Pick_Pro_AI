@@ -194,6 +194,8 @@ _ZI_SKEW = 2.0
 _ZI_DELTA = _ZI_SKEW / math.sqrt(1.0 + _ZI_SKEW * _ZI_SKEW)
 _ZI_SQRT_1_MINUS_D2 = math.sqrt(1.0 - _ZI_DELTA * _ZI_DELTA)
 _ZI_SKEW_MEAN_SHIFT = _ZI_DELTA * math.sqrt(2.0 / math.pi)
+# Minimum skewness below which the distribution is treated as symmetric normal
+_SKEW_ALPHA_EPSILON = 1e-9
 # ============================================================
 # END SECTION: Minutes Simulation Constants
 # ============================================================
@@ -665,8 +667,8 @@ def run_quantum_matrix_simulation(
         all_results = rng.poisson(lam_arr).astype(np.float64)
     else:
         # C5: Vectorized skew-normal sampling
-        delta = skew_alpha / math.sqrt(1.0 + skew_alpha * skew_alpha) if abs(skew_alpha) >= 1e-9 else 0.0
-        if abs(delta) < 1e-9:
+        delta = skew_alpha / math.sqrt(1.0 + skew_alpha * skew_alpha) if abs(skew_alpha) >= _SKEW_ALPHA_EPSILON else 0.0
+        if abs(delta) < _SKEW_ALPHA_EPSILON:
             # Pure normal
             all_results = rng.normal(effective_means, scaled_stds)
         else:

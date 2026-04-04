@@ -157,7 +157,8 @@ def _compute_rest_days(team_abbreviation: str) -> int:
     and returns the number of calendar days between that game and today.
     Falls back to 1 if no prior game is found.
     """
-    today = date.today().isoformat()
+    today = date.today()
+    today_iso = today.isoformat()
     try:
         row = _query_one(
             """
@@ -167,12 +168,12 @@ def _compute_rest_days(team_abbreviation: str) -> int:
             ORDER BY game_date DESC
             LIMIT 1
             """,
-            (team_abbreviation, team_abbreviation, today),
+            (team_abbreviation, team_abbreviation, today_iso),
             label="rest_days",
         )
         if row and row.get("game_date"):
             last_game = date.fromisoformat(row["game_date"])
-            return max(0, (date.today() - last_game).days)
+            return max(0, (today - last_game).days)
     except Exception as exc:
         logger.debug("rest_days computation failed: %s", exc)
     return 1
