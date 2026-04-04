@@ -88,6 +88,7 @@ from api_service import (
     get_team_stats,
     get_teams,
     get_todays_games,
+    get_todays_slate,
     get_win_probability,
     save_pick,
     search_players,
@@ -234,6 +235,7 @@ with st.sidebar:
         ("🎯  Prop Analyzer", "prop_analyzer"),
         ("📈  Bet Tracker", "bet_tracker"),
         ("📋  Pick History", "pick_history"),
+        ("🩺  Model Health", "model_health"),
         ("🏆  Standings", "standings"),
         ("🏟️  Teams", "teams_browse"),
         ("📊  Leaders & Stats", "leaders"),
@@ -350,6 +352,41 @@ def _page_home() -> None:
                 _game_button(game, key_prefix="today")
     else:
         st.info("No games scheduled for today.")
+
+    st.divider()
+
+    # ── Today's Best AI Picks ─────────────────────────────────
+    st.markdown('<div class="section-hdr">🤖 Today\'s Best AI Picks</div>',
+                unsafe_allow_html=True)
+    st.caption("Top Platinum & Gold picks auto-generated from today's slate.")
+
+    slate = get_todays_slate(top_n=5)
+    top_picks = slate.get("picks", [])
+    if top_picks:
+        for idx, pick in enumerate(top_picks[:5]):
+            p_name = pick.get("player_name", "Unknown")
+            p_stat = pick.get("stat_type", "?")
+            p_line = pick.get("prop_line", 0)
+            p_dir = pick.get("direction", "OVER")
+            p_tier = pick.get("tier", "Bronze")
+            p_conf = pick.get("confidence_score", 0)
+            p_edge = pick.get("edge_pct", 0.0)
+            p_team = pick.get("team", "?")
+            p_opp = pick.get("opponent", "?")
+            tier_emoji = {"Platinum": "💎", "Gold": "🥇", "Silver": "🥈", "Bronze": "🥉"}.get(p_tier, "🥉")
+            dir_icon = "🟢" if p_dir == "OVER" else "🔴"
+            st.markdown(
+                f"**{tier_emoji} {p_name}** ({p_team} vs {p_opp}) — "
+                f"{p_stat.upper()} {dir_icon} {p_dir} {p_line} &nbsp;|&nbsp; "
+                f"Confidence: {p_conf:.0f}/100 &nbsp;|&nbsp; Edge: {p_edge:+.1f}%"
+            )
+        if slate.get("games_scanned"):
+            st.caption(
+                f"Scanned {slate.get('games_scanned', 0)} games, "
+                f"{slate.get('players_scanned', 0)} players"
+            )
+    else:
+        st.info("No AI picks available yet — run the slate builder or wait for today's games.")
 
     st.divider()
 
@@ -2274,6 +2311,173 @@ def _page_bet_tracker() -> None:
             st.info("No platform data yet.")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# PAGE: MODEL HEALTH
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _page_model_health() -> None:
+    """Display model calibration and performance health dashboard."""
+
+    st.title("🩺 Model Health")
+    st.caption(
+        "Calibration curves, per-stat accuracy, and confidence-tier analysis — "
+        "powered by your historical pick data."
+    )
+
+    try:
+        from engine.calibration import get_calibration_summary, get_isotonic_calibration_curve
+    except ImportError:
+        st.error("Calibration module not available.  Ensure engine/calibration.py is on the path.")
+        return
+
+    # ── Time range selector ───────────────────────────────────────
+    days_options = {"Last 30 days": 30, "Last 90 days": 90, "Last 180 days": 180, "All time": 365}
+    selected_range = st.selectbox("Analysis period", list(days_options.keys()), index=1, key="mh_range")
+    days = days_options[selected_range]
+
+    summary = get_calibration_summary(days=days)
+    curve_data = get_isotonic_calibration_curve(days=days)
+
+    # ── Overview metrics ──────────────────────────────────────────
+    ov_cols = st.columns([1, 1, 1, 1])
+    ov_cols[0].metric("Total Bets Analyzed", summary.get("total_bets", 0))
+    overall_acc = summary.get("overall_accuracy")
+    ov_cols[1].metric(
+        "Overall Accuracy",
+        f"{overall_acc:.1%}" if overall_acc is not None else "N/A",
+    )
+    overconf_count = len(summary.get("overconfidence_buckets", []))
+    ov_cols[2].metric("Overconfident Buckets", overconf_count)
+    ov_cols[3].metric("Has Data", "✅" if summary.get("has_data") else "❌")
+
+    if not summary.get("has_data"):
+        st.info(
+            "Not enough historical data for calibration analysis.  "
+            "Save more picks and record outcomes to unlock this page."
+        )
+        return
+
+    st.divider()
+
+    # ── Calibration Curve ─────────────────────────────────────────
+    st.subheader("📈 Calibration Curve")
+    st.caption("Predicted probability vs actual hit rate. Perfect calibration = diagonal line.")
+
+    curve_pts = curve_data.get("curve", [])
+    if curve_pts:
+        cal_df = pd.DataFrame(curve_pts)
+        # Add perfect calibration reference
+        cal_df["Perfect"] = cal_df["predicted"]
+        chart_df = cal_df[["predicted", "actual", "Perfect"]].rename(
+            columns={"predicted": "Predicted", "actual": "Actual Hit Rate"}
+        )
+        st.line_chart(chart_df.set_index("Predicted"), use_container_width=True)
+
+        if curve_data.get("is_isotonic"):
+            st.caption("✅ Isotonic (PAVA-smoothed) calibration applied.")
+        else:
+            st.caption("Coarse bucket calibration (not enough data for isotonic).")
+
+        # Show data table
+        with st.expander("📋 Calibration Data", expanded=False):
+            st.dataframe(
+                pd.DataFrame(curve_pts)[["predicted", "actual", "count", "gap"]],
+                use_container_width=True,
+            )
+    else:
+        st.info("No calibration curve data available.")
+
+    st.divider()
+
+    # ── Per-Stat Accuracy ─────────────────────────────────────────
+    st.subheader("📊 Accuracy by Stat Type")
+
+    picks = get_pick_history(limit=500)
+    if picks:
+        stat_perf: dict[str, dict[str, int]] = {}
+        for p in picks:
+            s = p.get("stat_type", "unknown")
+            if s not in stat_perf:
+                stat_perf[s] = {"hits": 0, "misses": 0, "total": 0}
+            stat_perf[s]["total"] += 1
+            if p.get("result") == "hit":
+                stat_perf[s]["hits"] += 1
+            elif p.get("result") == "miss":
+                stat_perf[s]["misses"] += 1
+
+        stat_rows = []
+        for stat_name, counts in sorted(stat_perf.items()):
+            dec = counts["hits"] + counts["misses"]
+            wr = (counts["hits"] / dec * 100) if dec > 0 else 0.0
+            stat_rows.append({
+                "Stat Type": stat_name.title(),
+                "Total": counts["total"],
+                "Hits": counts["hits"],
+                "Misses": counts["misses"],
+                "Win Rate %": round(wr, 1),
+            })
+        if stat_rows:
+            st.dataframe(pd.DataFrame(stat_rows), use_container_width=True)
+    else:
+        st.info("No pick data available for per-stat breakdown.")
+
+    st.divider()
+
+    # ── Tier Confidence Analysis ──────────────────────────────────
+    st.subheader("🎯 Tier Confidence Analysis")
+    st.caption("Are higher tiers actually more accurate?")
+
+    if picks:
+        tier_perf: dict[str, dict[str, int]] = {}
+        for p in picks:
+            t = p.get("tier", "Bronze")
+            if t not in tier_perf:
+                tier_perf[t] = {"hits": 0, "misses": 0, "total": 0, "conf_sum": 0.0}
+            tier_perf[t]["total"] += 1
+            tier_perf[t]["conf_sum"] += p.get("confidence_score", 0)
+            if p.get("result") == "hit":
+                tier_perf[t]["hits"] += 1
+            elif p.get("result") == "miss":
+                tier_perf[t]["misses"] += 1
+
+        tier_order = ["Platinum", "Gold", "Silver", "Bronze", "Avoid"]
+        tier_rows = []
+        for tier_name in tier_order:
+            if tier_name not in tier_perf:
+                continue
+            counts = tier_perf[tier_name]
+            dec = counts["hits"] + counts["misses"]
+            wr = (counts["hits"] / dec * 100) if dec > 0 else 0.0
+            avg_conf = counts["conf_sum"] / counts["total"] if counts["total"] > 0 else 0
+            tier_rows.append({
+                "Tier": tier_name,
+                "Total Picks": counts["total"],
+                "Decided": dec,
+                "Win Rate %": round(wr, 1),
+                "Avg Confidence": round(avg_conf, 1),
+                "Calibration Gap": round(wr - avg_conf, 1) if dec > 0 else None,
+            })
+        if tier_rows:
+            st.dataframe(pd.DataFrame(tier_rows), use_container_width=True)
+            # Flag over/underconfidence
+            for row in tier_rows:
+                gap = row.get("Calibration Gap")
+                if gap is not None and gap < -10:
+                    st.warning(f"⚠️ **{row['Tier']}** tier is overconfident by {abs(gap):.0f}pp")
+                elif gap is not None and gap > 10:
+                    st.success(f"✅ **{row['Tier']}** tier is underconfident by {gap:.0f}pp — model is conservative")
+
+    # ── Overconfidence Buckets ────────────────────────────────────
+    overconf = summary.get("overconfidence_buckets", [])
+    if overconf:
+        st.divider()
+        st.subheader("⚠️ Overconfident Probability Buckets")
+        st.caption("Buckets where predicted probability exceeds actual hit rate by >5%.")
+        for mid in overconf:
+            st.text(f"  • {mid:.0%} bucket")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Page router
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2291,6 +2495,7 @@ _PAGE_DISPATCH: dict[str, Callable[[], None]] = {
     "prop_analyzer": _page_prop_analyzer,
     "pick_history": _page_pick_history,
     "bet_tracker": _page_bet_tracker,
+    "model_health": _page_model_health,
 }
 
 _page_fn = _PAGE_DISPATCH.get(st.session_state.page)

@@ -510,3 +510,20 @@ def get_dfs_lines(player_id: int, stat_type: str) -> dict:
         key=None,
         default={},
     )
+
+
+@st.cache_data(ttl=CACHE_TTL_LIVE)
+def get_todays_slate(top_n: int = 5) -> dict:
+    """Fetch today's top AI-generated picks from the autonomous slate builder.
+
+    Calls ``GET /api/slate/today``.
+
+    Returns:
+        Slate dict with ``picks``, ``games_scanned``, etc., or empty dict on error.
+    """
+    return _get(
+        "/api/slate/today",
+        params={"top_n": top_n, "min_edge": 2.0},
+        key=None,
+        default={},
+    )
