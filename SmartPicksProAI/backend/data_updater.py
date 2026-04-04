@@ -420,6 +420,7 @@ def run_update(db_path: str = DB_PATH) -> int:
     setup_db.create_tables(db_path)
 
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     try:
         last_date = _get_last_game_date(conn)
         if last_date is None:

@@ -111,5 +111,5 @@ def train_models(stat_type: str = "pts") -> dict:
 
 
 if __name__ == "__main__":
-    for stat in ["pts", "reb", "ast"]:
+    for stat in ["pts", "reb", "ast", "stl", "blk", "tov", "fg3m", "ftm"]:
         train_models(stat)
