@@ -350,10 +350,11 @@ def run(context: dict) -> dict:
                     stnd_cols = [c for c in stnd_df.columns if c != "team_id"]
                     stnd_df = stnd_df.rename(columns={c: f"team_stnd_{c}" for c in stnd_cols})
                     if "opp_team_id" in df.columns:
-                        opp_stnd = stnd_df.rename(
-                            columns={"team_id": "opp_team_id",
-                                     **{c: c.replace("team_stnd_", "opp_stnd_") for c in stnd_df.columns if c.startswith("team_stnd_")}}
-                        )
+                        opp_rename = {"team_id": "opp_team_id"}
+                        for col in stnd_df.columns:
+                            if col.startswith("team_stnd_"):
+                                opp_rename[col] = col.replace("team_stnd_", "opp_stnd_")
+                        opp_stnd = stnd_df.rename(columns=opp_rename)
                         df = df.merge(opp_stnd, on="opp_team_id", how="left")
         except Exception as exc:
             _logger.debug("Standings join failed: %s", exc)
