@@ -67,7 +67,10 @@ all: setup seed pipeline train run ## Full setup → seed → pipeline → train
 clean: ## Remove generated DB, model artifacts, and data caches
 	rm -f $(BACKEND)/smartpicks.db
 	rm -f $(PKG_ROOT)/engine/models/saved/*.joblib
-	rm -f $(PKG_ROOT)/data/raw/*.parquet $(PKG_ROOT)/data/raw/*.csv
-	rm -f $(PKG_ROOT)/data/processed/*.parquet $(PKG_ROOT)/data/processed/*.csv
-	rm -f $(PKG_ROOT)/data/ml_ready/*.parquet $(PKG_ROOT)/data/ml_ready/*.csv
+	rm -f $(PKG_ROOT)/data/raw/*.parquet
+	find $(PKG_ROOT)/data/raw -name '*.csv' ! -name 'sample_*.csv' -delete 2>/dev/null || true
+	rm -f $(PKG_ROOT)/data/processed/*.parquet
+	find $(PKG_ROOT)/data/processed -name '*.csv' ! -name 'sample_*.csv' -delete 2>/dev/null || true
+	rm -f $(PKG_ROOT)/data/ml_ready/*.parquet
+	find $(PKG_ROOT)/data/ml_ready -name '*.csv' ! -name 'sample_*.csv' -delete 2>/dev/null || true
 	@echo "Cleaned generated files. Sample fixtures preserved."
