@@ -11,6 +11,7 @@
 import random   # For randomizing game scenarios (minutes, pace)
 import math     # For mathematical rounding and calculations
 import time     # For simulation timing
+import numpy as np
 import logging
 _logger = logging.getLogger(__name__)
 def _safe_float(value, fallback=0.0):
@@ -45,6 +46,7 @@ from engine.math_helpers import (
     sample_poisson_like,               # Feature 8: Poisson-like for steals/blocks/turnovers
     sample_zero_inflated,              # Feature 8: Zero-inflated for threes
     estimate_zero_probability,         # Feature 8: Estimate zero prob from logs
+    _kde_bandwidth,                    # KDE bandwidth (Silverman's rule)
 )
 # ============================================================
 # SECTION: Module-Level Constants
@@ -198,6 +200,131 @@ _BLOWOUT_MARGIN_THRESHOLD = 15   # points
 # times and look at the overall distribution of results.
 # Like flipping a coin 10,000 times to verify it's fair.
 # ============================================================
+
+
+def _build_scenario_probabilities(
+    blowout_risk_factor,
+    vegas_spread=0.0,
+    game_total=225.0,
+    enriched_weights=None,
+):
+    """Return a normalized NumPy probability array over GAME_SCENARIOS.
+
+    Extracts the probability/weight logic from ``_simulate_game_scenario()``
+    without any random sampling so that the entire scenario-selection step
+    can be vectorized with ``rng.choice()``.
+    """
+    n = len(GAME_SCENARIOS)
+
+    # --- Enriched weights (highest priority) ---
+    if enriched_weights:
+        blowout_extra = max(0.0, blowout_risk_factor - 0.15)
+        weights = np.empty(n, dtype=np.float64)
+        for i, (name, prob, *_rest) in enumerate(GAME_SCENARIOS):
+            w = enriched_weights.get(name, prob)
+            if name in ("blowout_win", "blowout_loss"):
+                w = w + blowout_extra * 0.5
+            elif name == "normal":
+                w = max(0.0, w - blowout_extra)
+            weights[i] = max(0.0, w)
+        total = weights.sum()
+        if total >= 1e-9:
+            return weights / total
+        # Fallback to uniform
+        return np.full(n, 1.0 / n)
+
+    # --- Spread-total matrix (second priority) ---
+    abs_spread = abs(vegas_spread or 0.0)
+    gt = game_total or 225.0
+    matrix_weights = None
+
+    _sg = _SPREAD_TOTAL_MATRIX["shootout_game"]
+    _gb = _SPREAD_TOTAL_MATRIX["grind_blowout_game"]
+    _ds = _SPREAD_TOTAL_MATRIX["defensive_slug_game"]
+
+    if abs_spread < _sg["spread_max"] and gt > _sg["total_min"]:
+        matrix_weights = _sg["weights"]
+    elif abs_spread > _gb["spread_min"] and gt < _gb["total_max"]:
+        matrix_weights = _gb["weights"]
+    elif abs_spread < _ds["spread_max"] and gt < _ds["total_max"]:
+        matrix_weights = _ds["weights"]
+
+    if matrix_weights is not None:
+        weights = np.array(
+            [matrix_weights.get(s[0], 0.0) for s in GAME_SCENARIOS],
+            dtype=np.float64,
+        )
+        total = weights.sum()
+        if total >= 1e-9:
+            return weights / total
+
+    # --- Base weights with blowout-risk adjustment ---
+    blowout_extra = max(0.0, blowout_risk_factor - 0.15)
+    weights = np.empty(n, dtype=np.float64)
+    for i, (name, prob, *_rest) in enumerate(GAME_SCENARIOS):
+        if name in ("blowout_win", "blowout_loss"):
+            weights[i] = prob + blowout_extra * 0.5
+        elif name == "normal":
+            weights[i] = max(0.0, prob - blowout_extra)
+        else:
+            weights[i] = prob
+    total = weights.sum()
+    if total >= 1e-9:
+        return weights / total
+    return np.full(n, 1.0 / n)
+
+
+def _vectorized_hot_cold(rng, n, recent_game_logs=None):
+    """Generate *n* momentum multipliers as a NumPy array.
+
+    Deterministic momentum (from last-3-games weighted average) is checked
+    first.  If it triggers, every element gets the same deterministic
+    multiplier.  Otherwise, CV-based random hot/cold is drawn per-element
+    using vectorized NumPy operations.
+    """
+    # 1D: Enhanced deterministic momentum when 5+ logs available
+    if recent_game_logs and len(recent_game_logs) >= 5:
+        _mean_all = sum(recent_game_logs) / len(recent_game_logs)
+        if _mean_all > 1e-6:
+            last3 = recent_game_logs[-3:]
+            _weights = (0.20, 0.30, 0.50)
+            _weighted_recent = sum(w * v for w, v in zip(_weights, last3))
+            momentum = (_weighted_recent - _mean_all) / _mean_all
+            if momentum > MOMENTUM_HOT_THRESHOLD:
+                val = min(MOMENTUM_HOT_CAP, 1.0 + momentum * 0.3)
+                return np.full(n, val, dtype=np.float64)
+            if momentum < MOMENTUM_COLD_THRESHOLD:
+                val = max(MOMENTUM_COLD_FLOOR, 1.0 + momentum * 0.3)
+                return np.full(n, val, dtype=np.float64)
+
+    # CV-based player-specific hot/cold probabilities
+    hot_prob = HOT_HAND_PROBABILITY
+    cold_prob = COLD_GAME_PROBABILITY
+    if recent_game_logs and len(recent_game_logs) >= 5:
+        _mean = sum(recent_game_logs) / len(recent_game_logs)
+        if _mean > 1e-6:
+            _variance = sum((x - _mean) ** 2 for x in recent_game_logs) / len(recent_game_logs)
+            _std = _variance ** 0.5
+            _cv = _std / _mean
+            _cv_ratio = max(HOT_COLD_CV_RATIO_MIN, min(HOT_COLD_CV_RATIO_MAX, _cv / HOT_COLD_CV_BASELINE))
+            hot_prob = min(HOT_COLD_MAX_HOT_PROB, HOT_HAND_PROBABILITY * _cv_ratio)
+            cold_prob = min(HOT_COLD_MAX_COLD_PROB, COLD_GAME_PROBABILITY * _cv_ratio)
+
+    rolls = rng.random(n)
+    result = np.ones(n, dtype=np.float64)
+
+    hot_mask = rolls < hot_prob
+    cold_mask = (~hot_mask) & (rolls < hot_prob + cold_prob)
+
+    n_hot = int(hot_mask.sum())
+    n_cold = int(cold_mask.sum())
+    if n_hot > 0:
+        result[hot_mask] = rng.uniform(HOT_HAND_MULTIPLIER_MIN, HOT_HAND_MULTIPLIER_MAX, size=n_hot)
+    if n_cold > 0:
+        result[cold_mask] = rng.uniform(COLD_GAME_MULTIPLIER_MIN, COLD_GAME_MULTIPLIER_MAX, size=n_cold)
+    return result
+
+
 def run_quantum_matrix_simulation(
     projected_stat_average,
     stat_standard_deviation,
@@ -380,133 +507,183 @@ def run_quantum_matrix_simulation(
     # END SECTION: Apply Pre-Simulation Adjustments
     # ============================================================
     # ============================================================
-    # SECTION: Run Simulation Loop
+    # SECTION: Run Simulation Loop (Vectorized with NumPy)
     # This is the heart of Quantum Matrix Engine 5.6 — simulate many games!
     # ============================================================
-    # List to store every simulated game's result
-    all_simulated_game_results = []
-    # Counter for games where player goes OVER the prop line
-    count_of_games_over_line = 0
-    # Convergence tracking variables removed — simulation always runs to completion
-    # to guarantee p90 accuracy for high-ceiling alternate lines.
-    simulations_completed = number_of_simulations
-    # 1E: Running sum for mean+std convergence tracking
-    _running_sum = 0.0
-    _running_sum_sq = 0.0
+    n = number_of_simulations
+    simulations_completed = n
     _sim_start_time = time.monotonic()
-    # Run the simulation `number_of_simulations` times
-    # BEGINNER NOTE: range(n) creates numbers 0 to n-1
-    # We don't care about the index, just need to loop n times
-    for sim_index in range(number_of_simulations):
-        # --- Step 1: Pick a Game Scenario (W3: Ceiling/Floor Games) ---
-        # Instead of rolling blowout and foul trouble independently,
-        # we now pick ONE holistic scenario that determines BOTH minutes
-        # AND stats together. This models the real-world correlation:
-        # e.g., a player in foul trouble in a blowout DEFINITELY sits.
-        scenario_name, minutes_reduction, stat_scenario_multiplier = (
-            _simulate_game_scenario(
-                blowout_risk_factor,
-                vegas_spread=vegas_spread,
-                game_total=game_total,
-                enriched_weights=_enriched_scenario_weights,
+
+    # Reproducible NumPy RNG (keep stdlib seed for backward compat)
+    rng = np.random.default_rng(random_seed)
+
+    # --- Step 1: Pick Game Scenarios for ALL simulations at once ---
+    scenario_probs = _build_scenario_probabilities(
+        blowout_risk_factor,
+        vegas_spread=vegas_spread,
+        game_total=game_total,
+        enriched_weights=_enriched_scenario_weights,
+    )
+    scenario_indices = rng.choice(len(GAME_SCENARIOS), size=n, p=scenario_probs)
+
+    # Build per-scenario parameter arrays (min_red_lo/hi, stat_lo/hi)
+    _sc_min_red_lo = np.array([s[2] for s in GAME_SCENARIOS], dtype=np.float64)
+    _sc_min_red_hi = np.array([s[3] for s in GAME_SCENARIOS], dtype=np.float64)
+    _sc_stat_lo = np.array([s[4] for s in GAME_SCENARIOS], dtype=np.float64)
+    _sc_stat_hi = np.array([s[5] for s in GAME_SCENARIOS], dtype=np.float64)
+
+    # Draw uniform randoms for minutes_reduction and stat_multiplier per sim
+    min_red_lo = _sc_min_red_lo[scenario_indices]
+    min_red_hi = _sc_min_red_hi[scenario_indices]
+    stat_lo = _sc_stat_lo[scenario_indices]
+    stat_hi = _sc_stat_hi[scenario_indices]
+
+    minutes_reduction_arr = rng.uniform(min_red_lo, min_red_hi)
+    stat_scenario_mult_arr = rng.uniform(stat_lo, stat_hi)
+
+    # Clamp minutes_reduction to [-0.15, 0.60]
+    np.clip(minutes_reduction_arr, -0.15, 0.60, out=minutes_reduction_arr)
+    minutes_mult_arr = 1.0 - minutes_reduction_arr
+
+    # --- Step 2: Hot Hand / Cold Game Modifier for ALL sims ---
+    momentum_mult_arr = _vectorized_hot_cold(rng, n, recent_game_logs)
+
+    # --- Step 3: Compute effective_mean and scaled_std arrays ---
+    if use_minutes_sim:
+        # Simulate minutes from normal distribution, clamped to [0, 48]
+        sim_minutes_arr = rng.normal(projected_minutes, eff_minutes_std, size=n)
+        np.clip(sim_minutes_arr, 0.0, 48.0, out=sim_minutes_arr)
+        sim_minutes_arr *= minutes_mult_arr
+
+        # 1C: Garbage time adjustment for blowout scenarios
+        if projected_minutes > 0:
+            _is_star = projected_minutes >= 30
+            _BLOWOUT_SCENARIOS_SET = {"blowout_win", "blowout_loss", "grind_blowout"}
+            _is_blowout_idx = np.array(
+                [s[0] in _BLOWOUT_SCENARIOS_SET for s in GAME_SCENARIOS],
+                dtype=bool,
             )
+            blowout_mask = _is_blowout_idx[scenario_indices]
+            if blowout_mask.any():
+                n_blowout = int(blowout_mask.sum())
+                if _is_star:
+                    q4_reduction = rng.uniform(0.60, 0.80, size=n_blowout)
+                    gt_mins = projected_minutes * (1.0 - q4_reduction * 0.25)
+                else:
+                    q4_boost = rng.uniform(0.30, 0.50, size=n_blowout)
+                    gt_mins = projected_minutes * (1.0 + q4_boost * 0.25)
+                np.clip(gt_mins, 0.0, 48.0, out=gt_mins)
+                ceiling = gt_mins * 1.1
+                sim_minutes_arr[blowout_mask] = np.minimum(
+                    sim_minutes_arr[blowout_mask], ceiling
+                )
+
+        effective_means = (
+            stat_per_minute
+            * sim_minutes_arr
+            * stat_scenario_mult_arr
+            * momentum_mult_arr
         )
-        # minutes_reduction can be negative (close game/OT = extra minutes)
-        # Cap to [-0.15, 0.60] to avoid negative or impossibly high minutes
-        minutes_reduction = max(-0.15, min(0.60, minutes_reduction))
-        minutes_multiplier = 1.0 - minutes_reduction
-        # --- Step 2: Apply Hot Hand / Cold Game Modifier (W4: Momentum) ---
-        # Player-specific hot/cold probabilities are derived from the CV of
-        # recent game logs when available (high-variance players like Kyrie
-        # have more hot/cold games than consistent players like Jokic).
-        momentum_multiplier = _simulate_hot_cold_modifier(recent_game_logs)
-        # --- Step 3: Simulate Minutes (C8) OR Use Scenario Multiplier ---
-        # C8: When projected_minutes is available, simulate the player's
-        # actual minutes for this game, then derive stats from per-min rate.
-        # This naturally ties low-minutes games to low stat outputs.
-        if use_minutes_sim:
-            # Simulate tonight's minutes: sample from normal distribution
-            # (minutes are roughly symmetric — small positive skew for overtime
-            # games is handled by the scenario multiplier system above).
-            # Using sample_from_normal_distribution (symmetric) is appropriate here.
-            sim_minutes = max(
-                0.0,
-                min(48.0, sample_from_normal_distribution(projected_minutes, eff_minutes_std))
-            )
-            # Apply scenario-level minutes reduction on top
-            sim_minutes *= minutes_multiplier
-            # 1C: Apply garbage time adjustment for blowout scenarios
-            if projected_minutes > 0:
-                _is_star = projected_minutes >= 30
-                _gt_minutes = _apply_garbage_time_adjustment(projected_minutes, scenario_name, _is_star)
-                sim_minutes = min(sim_minutes, _gt_minutes * 1.1)  # don't exceed adjusted ceiling
-            effective_mean = (
-                stat_per_minute
-                * sim_minutes
-                * stat_scenario_multiplier
-                * momentum_multiplier
-            )
-            # Std scales with sqrt of minutes fraction
-            min_frac = sim_minutes / max(1.0, projected_minutes)
-            scaled_std = adjusted_standard_deviation * math.sqrt(max(0.05, min_frac))
+        min_frac = sim_minutes_arr / max(1.0, projected_minutes)
+        scaled_stds = adjusted_standard_deviation * np.sqrt(np.clip(min_frac, 0.05, None))
+    else:
+        effective_means = (
+            adjusted_stat_projection
+            * minutes_mult_arr
+            * stat_scenario_mult_arr
+            * momentum_mult_arr
+        )
+        scaled_stds = adjusted_standard_deviation * np.sqrt(np.clip(minutes_mult_arr, 0.1, None))
+
+    # --- Step 3b: Quarter-Aware Fatigue Curve (1B) ---
+    if enable_fatigue_curve:
+        avg_fatigue = sum(QUARTER_FATIGUE_RATES) / 4
+        is_back_to_back = rest_adjustment_factor < 0.97
+        if is_back_to_back:
+            avg_fatigue *= BACK_TO_BACK_FATIGUE_MULTIPLIER
+        effective_means *= avg_fatigue
+
+    # --- Step 4: Draw ALL stat samples (vectorized by distribution type) ---
+    if use_kde and kde_logs_scaled:
+        # C11: KDE sampling — pick random centers and add Gaussian noise
+        kde_arr = np.array(kde_logs_scaled, dtype=np.float64)
+        scenario_scale = minutes_mult_arr * stat_scenario_mult_arr * momentum_mult_arr
+        # Scale each log value by per-sim scenario_scale: shape (n, len(kde))
+        # Pick random center indices, then scale and add noise
+        center_idx = rng.integers(0, len(kde_arr), size=n)
+        centers = kde_arr[center_idx] * scenario_scale
+        bw = _kde_bandwidth(kde_logs_scaled)
+        noise = rng.normal(0.0, bw, size=n)
+        all_results = np.maximum(0.0, centers + noise)
+    elif stat_type in ('threes', 'fg3m'):
+        # Feature 8: Zero-inflated distribution
+        zero_prob = estimate_zero_probability(recent_game_logs or [], stat_type)
+        zero_rolls = rng.random(n)
+        zero_mask = zero_rolls < zero_prob
+
+        # Non-zero games use skew-normal with conditional mean
+        conditional_means = effective_means / np.maximum(0.001, 1.0 - zero_prob)
+        zi_stds = scaled_stds * 1.1
+        zi_skew = 2.0
+
+        # Vectorized skew-normal for non-zero games
+        delta = zi_skew / math.sqrt(1.0 + zi_skew * zi_skew)
+        sqrt_1_minus_d2 = math.sqrt(1.0 - delta * delta)
+        skew_mean_shift = delta * math.sqrt(2.0 / math.pi)
+        u0 = rng.standard_normal(n)
+        v = rng.standard_normal(n)
+        z = delta * np.abs(u0) + sqrt_1_minus_d2 * v
+        raw_samples = conditional_means + zi_stds * (z - skew_mean_shift)
+        # Round to nearest 0.5
+        raw_samples = np.round(raw_samples * 2.0) / 2.0
+        raw_samples = np.maximum(0.0, raw_samples)
+
+        all_results = np.where(zero_mask, 0.0, raw_samples)
+    elif stat_type in ('steals', 'blocks', 'turnovers'):
+        # Feature 8: Poisson-like discrete sampler
+        # Use empirical mean from game logs when enough history is available
+        logs = recent_game_logs or []
+        if logs and len(logs) >= 10:
+            base_lam = sum(logs) / len(logs)
         else:
-            # Standard approach: scale projection by minutes multiplier
-            effective_mean = (
-                adjusted_stat_projection
-                * minutes_multiplier
-                * stat_scenario_multiplier
-                * momentum_multiplier
-            )
-            # Scale std dev proportionally (less minutes = less variance too)
-            scaled_std = adjusted_standard_deviation * math.sqrt(max(0.1, minutes_multiplier))
-        # --- Step 3b: Apply Quarter-Aware Fatigue Curve (1B) ---
-        if enable_fatigue_curve:
-            avg_fatigue = sum(QUARTER_FATIGUE_RATES) / 4
-            is_back_to_back = rest_adjustment_factor < 0.97
-            if is_back_to_back:
-                avg_fatigue *= BACK_TO_BACK_FATIGUE_MULTIPLIER
-            effective_mean *= avg_fatigue
-        # --- Step 4: Draw Sample (C11: KDE when logs available, else C5: skew-normal) ---
-        # Priority order:
-        #   1. KDE from game logs (C11) — when player has 15+ recent games
-        #      KDE is scaled by scenario/minutes multipliers for context-awareness
-        #   2. Stat-specific distribution (Feature 8) — Poisson-like for low-count
-        #      discrete stats; zero-inflated for three-pointers
-        #   3. Skew-normal (C5) — parametric with stat-type-specific right skew
-        if use_kde and kde_logs_scaled:
-            # C11: Scale KDE logs by scenario/momentum multipliers, then sample
-            scenario_scale = minutes_multiplier * stat_scenario_multiplier * momentum_multiplier
-            kde_scaled_for_trial = [v * scenario_scale for v in kde_logs_scaled]
-            kde_sample = sample_from_kde(kde_scaled_for_trial)
-            if kde_sample is not None:
-                simulated_game_stat = kde_sample
+            base_lam = None
+
+        # Per-sim lambda scaled by effective_mean ratio
+        if base_lam is not None and base_lam > 0:
+            # Scale the empirical lambda by the ratio of effective_mean to
+            # the base adjusted projection so that scenario/momentum
+            # adjustments are reflected.
+            if adjusted_stat_projection > 1e-6:
+                lam_arr = base_lam * (effective_means / adjusted_stat_projection)
             else:
-                # Fallback: skew-normal if KDE fails for this trial
-                simulated_game_stat = sample_skew_normal(effective_mean, scaled_std, skew_alpha)
-        elif stat_type in ('threes', 'fg3m'):
-            # Feature 8: Zero-inflated distribution captures the "0-three games"
-            # mass that neither KDE nor skew-normal handles cleanly.
-            zero_prob = estimate_zero_probability(recent_game_logs or [], stat_type)
-            simulated_game_stat = sample_zero_inflated(
-                effective_mean, scaled_std, zero_prob, recent_game_logs or []
-            )
-        elif stat_type in ('steals', 'blocks', 'turnovers'):
-            # Feature 8: Poisson-like discrete sampler for low-count integer stats
-            simulated_game_stat = sample_poisson_like(effective_mean, recent_game_logs or [])
+                lam_arr = effective_means.copy()
         else:
-            # C5: Skew-normal captures the right tail of NBA stat distributions
-            # (explosion games, triple-doubles, etc.) better than pure normal.
-            simulated_game_stat = sample_skew_normal(effective_mean, scaled_std, skew_alpha)
-        # Stats can't be negative (can't have -3 assists)
-        simulated_game_stat = max(0.0, simulated_game_stat)
-        # --- Step 5: Record the Result ---
-        all_simulated_game_results.append(simulated_game_stat)
-        # Did this simulated game go OVER the prop line?
-        if simulated_game_stat > prop_line:
-            count_of_games_over_line += 1
-        # 1E: Track running stats for mean+std convergence
-        _running_sum += simulated_game_stat
-        _running_sum_sq += simulated_game_stat ** 2
+            lam_arr = effective_means.copy()
+        lam_arr = np.clip(lam_arr, 0.1, 20.0)
+        # Vectorized Poisson draw
+        all_results = rng.poisson(lam_arr).astype(np.float64)
+    else:
+        # C5: Vectorized skew-normal sampling
+        delta = skew_alpha / math.sqrt(1.0 + skew_alpha * skew_alpha) if abs(skew_alpha) >= 1e-9 else 0.0
+        if abs(delta) < 1e-9:
+            # Pure normal
+            all_results = rng.normal(effective_means, scaled_stds)
+        else:
+            sqrt_1_minus_d2 = math.sqrt(1.0 - delta * delta)
+            skew_mean_shift = delta * math.sqrt(2.0 / math.pi)
+            u0 = rng.standard_normal(n)
+            v = rng.standard_normal(n)
+            z = delta * np.abs(u0) + sqrt_1_minus_d2 * v
+            all_results = effective_means + scaled_stds * (z - skew_mean_shift)
+        all_results = np.maximum(0.0, all_results)
+
+    # --- Step 5: Collect results ---
+    all_simulated_game_results = all_results.tolist()
+    count_of_games_over_line = int(np.sum(all_results > prop_line))
+
+    # 1E: Running stats for mean+std convergence tracking
+    _running_sum = float(np.sum(all_results))
+    _running_sum_sq = float(np.sum(all_results ** 2))
     # ============================================================
     # END SECTION: Run Simulation Loop
     # ============================================================
@@ -1548,7 +1725,7 @@ def run_enhanced_simulation(
     projected_stat_average,
     stat_standard_deviation,
     prop_line,
-    number_of_simulations=2000,
+    number_of_simulations=10000,
     blowout_risk_factor=0.15,
     pace_adjustment_factor=1.0,
     matchup_adjustment_factor=1.0,
@@ -1574,7 +1751,7 @@ def run_enhanced_simulation(
         projected_stat_average (float): Projected mean for the stat
         stat_standard_deviation (float): Historical variability (std dev)
         prop_line (float): The betting line to beat
-        number_of_simulations (int): Simulations to run (default 2000)
+        number_of_simulations (int): Simulations to run (default 10000)
         blowout_risk_factor (float): 0.0-1.0 blowout probability
         pace_adjustment_factor (float): Game pace multiplier
         matchup_adjustment_factor (float): Opponent defense multiplier
