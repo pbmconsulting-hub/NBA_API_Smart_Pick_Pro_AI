@@ -34,7 +34,7 @@ confidence_tiers:
   platinum: 84
   gold: 65
   silver: 57
-  bronze: 35           # Below this = Do Not Bet
+  bronze: 45           # Below this = Do Not Bet (raised from 35 for profitability)
 
 # ── Minimum edge % per tier ──────────────────────────────────
 min_edge_pct:
@@ -50,7 +50,17 @@ min_probability:
 
 # ── Simulation ────────────────────────────────────────────────
 simulation:
-  default_iterations: 2000
+  default_iterations: 5000
+  # Stat-type specific iterations: high-variance stats need more samples
+  stat_iterations:
+    pts: 3000
+    reb: 3000
+    ast: 3000
+    stl: 5000
+    blk: 5000
+    tov: 4000
+    fg3m: 4000
+    ftm: 3000
   convergence_threshold: 0.001
   convergence_check_interval: 200
 
@@ -121,7 +131,11 @@ data_dirs:
   processed: "data/processed"
   ml_ready: "data/ml_ready"
 
-# ── League averages (updated periodically) ────────────────────
+# ── League averages (auto-updated at runtime when NBA API available) ───
+# These are fallback defaults used when the NBA API is unreachable.
+# At startup, the system will attempt to fetch current season averages
+# and override these values. See utils/league_averages.py.
 league_averages:
-  pace: 100.0
-  drtg: 110.0
+  pace: 99.5
+  drtg: 112.2
+  season: "2025-26"
