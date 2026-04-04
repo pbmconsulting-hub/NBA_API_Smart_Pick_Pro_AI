@@ -193,3 +193,265 @@ def get_model_performance_stats() -> dict:
         "by_stat": get_performance_by_stat(),
         "by_platform": get_performance_by_platform(),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Enhanced features — streak tracking, ROI, date-range filtering, export
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def get_current_streak() -> dict:
+    """Calculate the current win/loss streak.
+
+    Returns
+    -------
+    dict with ``streak_type`` ("win" | "loss" | "none"),
+    ``streak_length``, and ``streak_bets`` (list of bet dicts).
+    """
+    bets = load_all_bets()
+    if not bets:
+        return {"streak_type": "none", "streak_length": 0, "streak_bets": []}
+
+    # Sort by date descending (most recent first) then by id desc
+    resolved = [
+        b for b in bets
+        if b.get("result") in ("win", "loss")
+    ]
+    resolved.sort(key=lambda b: (b.get("bet_date", ""), b.get("id", 0)), reverse=True)
+
+    if not resolved:
+        return {"streak_type": "none", "streak_length": 0, "streak_bets": []}
+
+    streak_type = resolved[0]["result"]
+    streak_bets = []
+    for bet in resolved:
+        if bet["result"] == streak_type:
+            streak_bets.append(bet)
+        else:
+            break
+
+    return {
+        "streak_type": streak_type,
+        "streak_length": len(streak_bets),
+        "streak_bets": streak_bets,
+    }
+
+
+def get_longest_streaks() -> dict:
+    """Find the longest win and loss streaks in bet history.
+
+    Returns
+    -------
+    dict with ``longest_win`` and ``longest_loss`` (int).
+    """
+    bets = load_all_bets()
+    resolved = [
+        b for b in bets
+        if b.get("result") in ("win", "loss")
+    ]
+    resolved.sort(key=lambda b: (b.get("bet_date", ""), b.get("id", 0)))
+
+    longest_win = 0
+    longest_loss = 0
+    current_type = ""
+    current_count = 0
+
+    for bet in resolved:
+        if bet["result"] == current_type:
+            current_count += 1
+        else:
+            current_type = bet["result"]
+            current_count = 1
+
+        if current_type == "win":
+            longest_win = max(longest_win, current_count)
+        elif current_type == "loss":
+            longest_loss = max(longest_loss, current_count)
+
+    return {"longest_win": longest_win, "longest_loss": longest_loss}
+
+
+def get_roi_stats(*, bankroll: float = 500.0) -> dict:
+    """Calculate return on investment statistics.
+
+    Parameters
+    ----------
+    bankroll:
+        The bankroll used for bet sizing to calculate unit-based ROI.
+
+    Returns
+    -------
+    dict with ``total_wagered``, ``total_returned``, ``net_profit``,
+    ``roi_pct``, ``units_profit``.
+    """
+    bets = load_all_bets()
+    resolved = [b for b in bets if b.get("result") in ("win", "loss", "push")]
+
+    total_wagered = 0.0
+    total_returned = 0.0
+
+    for bet in resolved:
+        wager = float(bet.get("recommended_bet", 0) or 0)
+        if wager <= 0:
+            wager = bankroll * 0.02  # Default 2% unit
+
+        total_wagered += wager
+
+        result = bet["result"]
+        if result == "win":
+            # Assume standard -110 payout (return wager + profit)
+            total_returned += wager + (wager * 0.909)
+        elif result == "push":
+            total_returned += wager  # Return stake
+
+    net_profit = total_returned - total_wagered
+    roi_pct = (net_profit / total_wagered * 100) if total_wagered > 0 else 0.0
+    unit_size = bankroll * 0.02
+    units = (net_profit / unit_size) if unit_size > 0 else 0.0
+
+    return {
+        "total_wagered": round(total_wagered, 2),
+        "total_returned": round(total_returned, 2),
+        "net_profit": round(net_profit, 2),
+        "roi_pct": round(roi_pct, 2),
+        "units_profit": round(units, 2),
+        "num_bets": len(resolved),
+    }
+
+
+def get_bets_by_date_range(
+    start_date: str = "",
+    end_date: str = "",
+) -> list[dict]:
+    """Filter bets by date range.
+
+    Parameters
+    ----------
+    start_date:
+        ISO date string (inclusive).  Empty = no lower bound.
+    end_date:
+        ISO date string (inclusive).  Empty = no upper bound.
+
+    Returns
+    -------
+    list[dict]
+    """
+    bets = load_all_bets()
+    filtered = []
+    for bet in bets:
+        bd = bet.get("bet_date", "")
+        if start_date and bd < start_date:
+            continue
+        if end_date and bd > end_date:
+            continue
+        filtered.append(bet)
+    return filtered
+
+
+def get_daily_summary(days: int = 30) -> list[dict]:
+    """Get a daily win/loss summary for the last N days.
+
+    Returns
+    -------
+    list[dict] with ``date``, ``wins``, ``losses``, ``pushes``,
+    ``total``, ``win_rate``.
+    """
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    bets = get_bets_by_date_range(start_date=cutoff)
+
+    daily: dict[str, dict] = {}
+    for bet in bets:
+        d = bet.get("bet_date", "")
+        if d not in daily:
+            daily[d] = {"date": d, "wins": 0, "losses": 0, "pushes": 0, "total": 0}
+        result = bet.get("result", "")
+        if result == "win":
+            daily[d]["wins"] += 1
+        elif result == "loss":
+            daily[d]["losses"] += 1
+        elif result == "push":
+            daily[d]["pushes"] += 1
+        daily[d]["total"] += 1
+
+    for d in daily.values():
+        resolved = d["wins"] + d["losses"]
+        d["win_rate"] = round(d["wins"] / resolved, 4) if resolved > 0 else 0.0
+
+    return sorted(daily.values(), key=lambda x: x["date"], reverse=True)
+
+
+def export_bets_csv(
+    start_date: str = "",
+    end_date: str = "",
+) -> str:
+    """Export bets as a CSV string for download.
+
+    Parameters
+    ----------
+    start_date:
+        ISO date string (inclusive).
+    end_date:
+        ISO date string (inclusive).
+
+    Returns
+    -------
+    str
+        CSV-formatted string.
+    """
+    bets = get_bets_by_date_range(start_date=start_date, end_date=end_date)
+    if not bets:
+        return ""
+
+    columns = [
+        "id", "bet_date", "player_name", "stat_type", "prop_line",
+        "direction", "result", "actual_value", "team", "opponent",
+        "platform", "confidence_score", "confidence_tier",
+        "model_probability", "edge_pct", "kelly_fraction",
+        "recommended_bet", "source", "notes",
+    ]
+
+    lines = [",".join(columns)]
+    for bet in bets:
+        row = []
+        for col in columns:
+            val = bet.get(col, "")
+            # Escape commas in string values
+            val_str = str(val) if val is not None else ""
+            if "," in val_str:
+                val_str = f'"{val_str}"'
+            row.append(val_str)
+        lines.append(",".join(row))
+
+    return "\n".join(lines)
+
+
+def get_performance_by_player() -> dict[str, dict]:
+    """Get win/loss stats grouped by player name.
+
+    Returns
+    -------
+    dict mapping player name to ``{"wins", "losses", "total", "win_rate"}``.
+    """
+    bets = load_all_bets()
+    players: dict[str, dict] = {}
+
+    for bet in bets:
+        name = bet.get("player_name", "Unknown")
+        result = bet.get("result", "")
+        if result not in ("win", "loss"):
+            continue
+
+        if name not in players:
+            players[name] = {"wins": 0, "losses": 0, "total": 0, "win_rate": 0.0}
+
+        players[name]["total"] += 1
+        if result == "win":
+            players[name]["wins"] += 1
+        else:
+            players[name]["losses"] += 1
+
+    for data in players.values():
+        if data["total"] > 0:
+            data["win_rate"] = round(data["wins"] / data["total"], 4)
+
+    return players
