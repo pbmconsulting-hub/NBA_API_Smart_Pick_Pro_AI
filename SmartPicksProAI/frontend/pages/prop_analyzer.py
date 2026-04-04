@@ -348,7 +348,7 @@ def render() -> None:
             if epm or raptor:
                 adv_cols = st.columns([1, 1, 1, 1])
                 if epm:
-                    adv_cols[0].metric("EPM Total", f"{epm.get('total', 0):+.1f}")
+                    adv_cols[0].metric("EPM Total", f"{epm.get('total_epm', epm.get('total', 0)):+.1f}")
                     adv_cols[1].metric("EPM Percentile", f"{epm.get('percentile', 50):.0f}th")
                 if raptor:
                     adv_cols[2].metric("RAPTOR Total", f"{raptor.get('raptor_total', 0):+.1f}")

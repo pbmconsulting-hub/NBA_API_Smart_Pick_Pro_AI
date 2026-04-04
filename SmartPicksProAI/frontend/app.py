@@ -34,6 +34,7 @@ from styles.theme import (
     get_sidebar_brand_html,
 )
 from tracking.database import initialize_database as _init_tracker_db
+from tracking.auto_resolver import auto_resolve_pending_picks as _auto_resolve
 from api_service import (
     get_defense_vs_position,
     get_league_leaders,
@@ -85,6 +86,12 @@ st.set_page_config(
 
 # Initialize bet tracker database
 _init_tracker_db()
+
+# Auto-resolve pending picks from yesterday's box scores
+try:
+    _auto_resolve()
+except Exception:
+    pass  # Never block app startup for auto-resolve
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Session-state navigation
