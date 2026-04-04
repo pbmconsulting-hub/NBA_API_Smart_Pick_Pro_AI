@@ -67,7 +67,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 BASE_URL = "http://localhost:8000"
-CACHE_TTL_SECONDS = 3600
+CACHE_TTL_SECONDS = 3600          # 1 hour — standings, rosters, player bios
+CACHE_TTL_LIVE = 300              # 5 min  — today's games, recent games
 DEFAULT_REQUEST_TIMEOUT = 15
 REFRESH_REQUEST_TIMEOUT = 120
 
@@ -115,13 +116,13 @@ def _get(
 # ---------------------------------------------------------------------------
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
+@st.cache_data(ttl=CACHE_TTL_LIVE)
 def get_todays_games() -> list[dict]:
     """Fetch today's NBA matchups from the backend."""
     return _get("/api/games/today", key="games")
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
+@st.cache_data(ttl=CACHE_TTL_LIVE)
 def get_player_last5(player_id: int) -> dict:
     """Fetch a player's last 5 game logs from the backend."""
     return _get(f"/api/players/{player_id}/last5", key=None, default={})
@@ -153,7 +154,7 @@ def get_team_stats(team_id: int, last_n: int = 10) -> list[dict]:
     )
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
+@st.cache_data(ttl=CACHE_TTL_LIVE)
 def get_defense_vs_position(team_abbreviation: str) -> list[dict]:
     """Fetch defense-vs-position multipliers for a team."""
     return _get(
@@ -293,13 +294,13 @@ def get_league_dash_teams() -> list[dict]:
     return _get("/api/league-dash/teams", key="teams")
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
+@st.cache_data(ttl=CACHE_TTL_LIVE)
 def get_recent_games() -> list[dict]:
     """Fetch recent NBA games from the backend."""
     return _get("/api/games/recent", key="games")
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
+@st.cache_data(ttl=CACHE_TTL_LIVE)
 def get_schedule() -> list[dict]:
     """Fetch the NBA schedule from the backend."""
     return _get("/api/schedule", key="schedule")
@@ -486,3 +487,43 @@ def update_pick_result(pick_id: int, result: str, actual_value: float | None = N
     except (requests.RequestException, ValueError) as exc:
         logger.error("POST /api/picks/result failed: %s", exc)
         return {"status": "error", "message": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# DFS prop-line lookup
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=CACHE_TTL_LIVE)
+def get_dfs_lines(player_id: int, stat_type: str) -> dict:
+    """Fetch DFS platform lines for a player and stat type.
+
+    Calls ``GET /api/dfs/lines``.
+
+    Returns:
+        ``{"lines": {"PrizePicks": 24.5, ...}, "consensus": 24.5}``
+        or empty dict on error.
+    """
+    return _get(
+        "/api/dfs/lines",
+        params={"player_id": player_id, "stat_type": stat_type},
+        key=None,
+        default={},
+    )
+
+
+@st.cache_data(ttl=CACHE_TTL_LIVE)
+def get_todays_slate(top_n: int = 5) -> dict:
+    """Fetch today's top AI-generated picks from the autonomous slate builder.
+
+    Calls ``GET /api/slate/today``.
+
+    Returns:
+        Slate dict with ``picks``, ``games_scanned``, etc., or empty dict on error.
+    """
+    return _get(
+        "/api/slate/today",
+        params={"top_n": top_n, "min_edge": 2.0},
+        key=None,
+        default={},
+    )
