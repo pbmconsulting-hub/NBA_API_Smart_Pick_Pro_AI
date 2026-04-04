@@ -1287,6 +1287,39 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
 
     # ── Step 1: Projection ──────────────────────────────────────────
     rest_days = _compute_rest_days(team_abbrev)
+
+    # Check for teammate injuries to adjust minutes/usage
+    _minutes_adj_factor = 1.0
+    _teammate_out_notes: str | None = None
+    try:
+        import injury_client
+        # Look up team_id for the player's team
+        team_info = _query_one(
+            "SELECT team_id FROM Teams WHERE abbreviation = ?",
+            (team_abbrev,),
+            label="analyze/team_id",
+        )
+        if team_info:
+            with _db() as inj_conn:
+                team_injuries = injury_client.get_injured_players_for_team(
+                    inj_conn, team_info["team_id"],
+                )
+            # Count players ruled Out or Doubtful → boost minutes for active players
+            out_players = [
+                inj for inj in team_injuries
+                if inj.get("status", "").lower() in ("out", "doubtful")
+                and inj.get("player_id") != body.player_id
+            ]
+            if out_players:
+                # Each key player out adds ~3-5% extra minutes/usage
+                _minutes_adj_factor = 1.0 + 0.03 * len(out_players)
+                _teammate_out_notes = "; ".join(
+                    f"{p.get('full_name', 'Unknown')} ({p.get('status', '?')}: {p.get('reason', 'N/A')})"
+                    for p in out_players
+                )
+    except Exception as exc:
+        logger.debug("Injury-based projection adjustment failed: %s", exc)
+
     try:
         projection = build_player_projection(
             player_data=player_data,
@@ -1298,6 +1331,8 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             teams_data=teams_data,
             recent_form_games=recent_5,
             vegas_spread=body.vegas_spread,
+            minutes_adjustment_factor=_minutes_adj_factor,
+            teammate_out_notes=_teammate_out_notes,
         )
     except Exception as exc:
         logger.exception("Projection failed for player %d.", body.player_id)
@@ -1339,6 +1374,17 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         "vegas_spread": body.vegas_spread,
     }
 
+    # Auto-populate platform_lines from cached odds (enables Force 9)
+    platform_lines: dict[str, float] | None = None
+    try:
+        import odds_client
+        with _db() as odds_conn:
+            platform_lines = odds_client.get_cached_player_lines(
+                odds_conn, body.player_id, stat_type,
+            ) or None
+    except Exception as exc:
+        logger.debug("Could not load cached odds: %s", exc)
+
     try:
         forces = analyze_directional_forces(
             player_data=player_data,
@@ -1346,6 +1392,7 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             stat_type=stat_type,
             projection_result=projection,
             game_context=game_ctx,
+            platform_lines=platform_lines,
             recent_form_ratio=projection.get("recent_form_ratio"),
         )
     except Exception as exc:
@@ -1553,6 +1600,15 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         logger.warning("Explainer failed: %s", exc)
         explanation = {"tldr": "Analysis complete.", "verdict": direction}
 
+    # ── Step 12½: Injury status lookup ────────────────────────────────
+    injury_info: dict | None = None
+    try:
+        import injury_client
+        with _db() as inj_conn:
+            injury_info = injury_client.get_player_injury_status(inj_conn, body.player_id)
+    except Exception as exc:
+        logger.debug("Could not load injury status: %s", exc)
+
     # ── Assemble response ───────────────────────────────────────────
     return {
         "player_id": body.player_id,
@@ -1581,6 +1637,9 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         "distribution_check": distribution_check,
         "efficiency": efficiency,
         "explanation": explanation,
+        # Phase 5 — live odds & injury integration
+        "platform_lines": platform_lines,
+        "injury_status": injury_info,
     }
 
 
@@ -1729,6 +1788,387 @@ def update_pick_result(body: UpdatePickResultRequest) -> dict:
         return {"status": "updated", "pick_id": body.pick_id}
     except sqlite3.Error as exc:
         logger.exception("Failed to update pick result.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Slate Generator — autonomous pick generator for tonight's games
+# ---------------------------------------------------------------------------
+
+# The core stat types the slate generator evaluates for every player.
+_SLATE_STAT_TYPES = ["points", "rebounds", "assists", "threes", "steals", "blocks"]
+
+
+@app.get("/api/slate/today")
+def generate_daily_slate(
+    top_n: int = 50,
+    min_edge: float = 0.0,
+) -> dict:
+    """Auto-generate and rank all available picks for tonight's games.
+
+    This is the fully autonomous slate builder.  It:
+    1. Fetches today's games from the DB.
+    2. Gets rosters for both teams in each game.
+    3. For each rostered player, looks up cached prop lines from
+       The Odds API (or falls back to a projection-based line).
+    4. Runs the same analysis pipeline as ``POST /api/picks/analyze``
+       for every player × stat type combination.
+    5. Returns picks ranked by Composite Win Score (edge × confidence).
+
+    Query Parameters:
+        top_n: Maximum number of picks to return (default 50).
+        min_edge: Minimum edge percentage to include (default 0.0).
+
+    Returns:
+        JSON with ``date``, ``games_scanned``, ``players_scanned``,
+        ``picks`` (sorted by ``composite_score`` descending).
+    """
+    from engine.confidence import calculate_confidence_score
+    from engine.data_adapter import (
+        STAT_TYPE_TO_DB_COL,
+        STAT_TYPE_TO_PROJECTION_KEY,
+        build_engine_defense_data,
+        build_engine_game_logs,
+        build_engine_player_data,
+        build_engine_teams_data,
+        compute_season_averages,
+        get_stat_std_from_logs,
+    )
+    from engine.edge_detection import analyze_directional_forces
+    from engine.projections import build_player_projection
+    from engine.simulation import run_enhanced_simulation
+
+    today_str = date.today().isoformat()
+
+    # ── Step 1: Get today's games ──────────────────────────────────
+    games = _query_rows(
+        "SELECT * FROM Games WHERE game_date = ?",
+        (today_str,),
+        label="slate/games",
+    )
+    if not games:
+        return {
+            "date": today_str,
+            "games_scanned": 0,
+            "players_scanned": 0,
+            "picks": [],
+            "message": "No games scheduled today.",
+        }
+
+    # ── Step 2: Get teams + defense data (shared) ──────────────────
+    teams_raw = _query_rows("SELECT * FROM Teams", label="slate/teams")
+    teams_data = build_engine_teams_data(teams_raw)
+
+    # ── Step 3: For each game, get rosters and run analysis ────────
+    all_picks: list[dict] = []
+    players_scanned = 0
+
+    for game in games:
+        home_abbrev = game.get("home_abbrev", "")
+        away_abbrev = game.get("away_abbrev", "")
+        if not home_abbrev or not away_abbrev:
+            continue
+
+        for team_abbrev, opp_abbrev, is_home in [
+            (home_abbrev, away_abbrev, True),
+            (away_abbrev, home_abbrev, False),
+        ]:
+            # Get players for this team
+            roster = _query_rows(
+                "SELECT player_id FROM Players WHERE team_abbreviation = ? AND is_active = 1",
+                (team_abbrev,),
+                label=f"slate/roster/{team_abbrev}",
+            )
+            if not roster:
+                continue
+
+            # Defense data for the opponent
+            defense_raw = _query_rows(
+                "SELECT * FROM Defense_Vs_Position WHERE team_abbreviation = ?",
+                (opp_abbrev,),
+                label=f"slate/defense/{opp_abbrev}",
+            )
+            defense_data = build_engine_defense_data(defense_raw)
+            rest_days = _compute_rest_days(team_abbrev)
+
+            for player_row_brief in roster:
+                player_id = player_row_brief["player_id"]
+                players_scanned += 1
+
+                # Full player info
+                player_row = _query_one(
+                    "SELECT * FROM Players WHERE player_id = ?",
+                    (player_id,),
+                    label="slate/player",
+                )
+                if not player_row:
+                    continue
+
+                # Season logs
+                season_logs = _query_rows(
+                    """
+                    SELECT l.*, g.game_date, g.matchup, g.home_abbrev, g.away_abbrev
+                    FROM Player_Game_Logs l
+                    JOIN Games g ON g.game_id = l.game_id
+                    WHERE l.player_id = ?
+                    ORDER BY g.game_date DESC
+                    LIMIT ?
+                    """,
+                    (player_id, MAX_SEASON_GAMES),
+                    label="slate/logs",
+                )
+                if len(season_logs) < 5:
+                    continue  # Not enough data for meaningful analysis
+
+                engine_logs = build_engine_game_logs(season_logs)
+                player_data = build_engine_player_data(player_row, engine_logs)
+                recent_5 = engine_logs[:5]
+
+                # Projection
+                try:
+                    projection = build_player_projection(
+                        player_data=player_data,
+                        opponent_team_abbreviation=opp_abbrev,
+                        is_home_game=is_home,
+                        rest_days=rest_days,
+                        game_total=220.0,
+                        defensive_ratings_data=defense_data,
+                        teams_data=teams_data,
+                        recent_form_games=recent_5,
+                        vegas_spread=0.0,
+                    )
+                except Exception:
+                    continue
+
+                # Run analysis for each stat type
+                for stat_type in _SLATE_STAT_TYPES:
+                    if stat_type not in STAT_TYPE_TO_DB_COL:
+                        continue
+
+                    # Get the prop line: first try cached odds, then projection
+                    prop_line: float | None = None
+                    platform_lines_for_stat: dict[str, float] | None = None
+                    try:
+                        import odds_client
+                        with _db() as odds_conn:
+                            platform_lines_for_stat = odds_client.get_cached_player_lines(
+                                odds_conn, player_id, stat_type,
+                            ) or None
+                            if platform_lines_for_stat:
+                                # Use consensus as the primary line
+                                prop_line = sum(platform_lines_for_stat.values()) / len(
+                                    platform_lines_for_stat
+                                )
+                    except Exception:
+                        pass
+
+                    if prop_line is None:
+                        # Fall back to projection-based line (rounded to 0.5)
+                        proj_key = STAT_TYPE_TO_PROJECTION_KEY.get(
+                            stat_type, f"projected_{stat_type}"
+                        )
+                        raw_proj = float(projection.get(proj_key, 0) or 0)
+                        if raw_proj <= 0:
+                            continue
+                        prop_line = round(raw_proj * 2) / 2  # round to nearest 0.5
+
+                    if prop_line <= 0:
+                        continue
+
+                    # Simulation
+                    proj_key = STAT_TYPE_TO_PROJECTION_KEY.get(
+                        stat_type, f"projected_{stat_type}"
+                    )
+                    projected_avg = float(projection.get(proj_key, 0) or 0)
+                    stat_std = get_stat_std_from_logs(season_logs, stat_type)
+                    recent_values = [
+                        float(g.get(STAT_TYPE_TO_DB_COL[stat_type]) or 0)
+                        for g in engine_logs[:20]
+                    ]
+
+                    try:
+                        sim_result = run_enhanced_simulation(
+                            projected_stat_average=projected_avg,
+                            stat_standard_deviation=stat_std,
+                            prop_line=prop_line,
+                            blowout_risk_factor=float(projection.get("blowout_risk", 0.15)),
+                            pace_adjustment_factor=float(projection.get("pace_factor", 1.0)),
+                            matchup_adjustment_factor=float(projection.get("defense_factor", 1.0)),
+                            home_away_adjustment=float(projection.get("home_away_factor", 0.0)),
+                            rest_adjustment_factor=float(projection.get("rest_factor", 1.0)),
+                            stat_type=stat_type,
+                            recent_game_logs=(
+                                recent_values if len(recent_values) >= 10 else None
+                            ),
+                            vegas_spread=0.0,
+                            game_total=220.0,
+                        )
+                    except Exception:
+                        continue
+
+                    prob_over = float(sim_result.get("probability_over", 0.5))
+                    direction = "OVER" if prob_over >= 0.5 else "UNDER"
+                    model_prob = prob_over if direction == "OVER" else (1.0 - prob_over)
+
+                    # Edge
+                    implied_prob_minus_110 = 110.0 / (110.0 + 100.0)
+                    edge_pct = round((model_prob - implied_prob_minus_110) * 100, 2)
+
+                    if edge_pct < min_edge:
+                        continue
+
+                    # Forces
+                    game_ctx = {
+                        "opponent": opp_abbrev,
+                        "is_home": is_home,
+                        "rest_days": rest_days,
+                        "game_total": 220.0,
+                        "vegas_spread": 0.0,
+                    }
+                    try:
+                        forces = analyze_directional_forces(
+                            player_data=player_data,
+                            prop_line=prop_line,
+                            stat_type=stat_type,
+                            projection_result=projection,
+                            game_context=game_ctx,
+                            platform_lines=platform_lines_for_stat,
+                            recent_form_ratio=projection.get("recent_form_ratio"),
+                        )
+                    except Exception:
+                        forces = {
+                            "over_count": 0, "under_count": 0,
+                            "over_strength": 0.0, "under_strength": 0.0,
+                            "net_direction": direction, "net_strength": 0.0,
+                            "conflict_severity": 0.0,
+                        }
+
+                    # Confidence
+                    season_avgs = compute_season_averages(engine_logs)
+                    db_col = STAT_TYPE_TO_DB_COL[stat_type]
+                    stat_avg = season_avgs.get(db_col, projected_avg)
+
+                    try:
+                        confidence = calculate_confidence_score(
+                            probability_over=prob_over,
+                            edge_percentage=edge_pct,
+                            directional_forces=forces,
+                            defense_factor=float(projection.get("defense_factor", 1.0)),
+                            stat_standard_deviation=stat_std,
+                            stat_average=stat_avg,
+                            simulation_results=sim_result.get("simulated_results", []),
+                            games_played=player_data.get("games_played"),
+                            recent_form_ratio=projection.get("recent_form_ratio"),
+                            stat_type=stat_type,
+                        )
+                    except Exception:
+                        confidence = {
+                            "confidence_score": 50.0,
+                            "tier": "Bronze",
+                            "direction": direction,
+                        }
+
+                    conf_score = float(confidence.get("confidence_score", 50.0))
+                    composite = round(edge_pct * conf_score / 100.0, 4)
+
+                    all_picks.append({
+                        "player_id": player_id,
+                        "player_name": player_data.get("name", ""),
+                        "team": team_abbrev,
+                        "opponent": opp_abbrev,
+                        "is_home": is_home,
+                        "stat_type": stat_type,
+                        "prop_line": prop_line,
+                        "projected_value": projected_avg,
+                        "direction": direction,
+                        "model_probability": round(model_prob, 4),
+                        "edge_pct": edge_pct,
+                        "confidence_score": round(conf_score, 2),
+                        "tier": confidence.get("tier", "Bronze"),
+                        "composite_score": composite,
+                        "has_live_odds": platform_lines_for_stat is not None,
+                    })
+
+    # ── Sort by composite score and return top N ───────────────────
+    all_picks.sort(key=lambda p: p["composite_score"], reverse=True)
+    top_picks = all_picks[:top_n]
+
+    return {
+        "date": today_str,
+        "games_scanned": len(games),
+        "players_scanned": players_scanned,
+        "total_edges_found": len(all_picks),
+        "picks": top_picks,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Odds & Injury utility endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/admin/refresh-odds")
+def refresh_odds_endpoint() -> dict:
+    """Manually trigger a refresh of live odds from The Odds API."""
+    try:
+        import odds_client
+        with _db() as conn:
+            odds_client.ensure_prop_lines_table(conn)
+            n = odds_client.fetch_todays_odds(conn)
+        return {"status": "ok", "rows_cached": n}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/refresh-injuries")
+def refresh_injuries_endpoint() -> dict:
+    """Manually trigger a refresh of injury data."""
+    try:
+        import injury_client
+        with _db() as conn:
+            n = injury_client.refresh_injury_status(conn)
+        return {"status": "ok", "rows_upserted": n}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/injuries/team/{team_abbrev}")
+def get_team_injuries(team_abbrev: str) -> dict:
+    """Return current injuries for a team."""
+    try:
+        import injury_client
+        # Look up team_id from abbreviation
+        team_row = _query_one(
+            "SELECT team_id FROM Teams WHERE abbreviation = ?",
+            (team_abbrev.upper(),),
+            label="injuries/team_lookup",
+        )
+        if not team_row:
+            raise HTTPException(status_code=404, detail=f"Team '{team_abbrev}' not found.")
+        with _db() as conn:
+            injuries = injury_client.get_injured_players_for_team(conn, team_row["team_id"])
+        return {"team": team_abbrev.upper(), "injuries": injuries}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/odds/player/{player_id}")
+def get_player_odds(player_id: int, stat_type: str = "points") -> dict:
+    """Return cached prop lines for a player + stat type."""
+    try:
+        import odds_client
+        with _db() as conn:
+            lines = odds_client.get_cached_player_lines(conn, player_id, stat_type)
+            consensus = odds_client.get_consensus_line(conn, player_id, stat_type)
+        return {
+            "player_id": player_id,
+            "stat_type": stat_type,
+            "lines_by_book": lines,
+            "consensus_line": consensus,
+        }
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

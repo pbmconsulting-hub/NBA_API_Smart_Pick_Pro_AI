@@ -30,6 +30,10 @@ import initial_pull
 import setup_db
 from utils import get_new_rows, parse_matchup_abbreviations, upsert_dataframe
 
+# New clients for injury status and live odds
+import injury_client
+import odds_client
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -383,6 +387,24 @@ def _get_completed_game_ids_in_range(
     return [r[0] for r in rows]
 
 
+def _refresh_injuries_and_odds(conn: sqlite3.Connection) -> None:
+    """Refresh injury status and live odds for today's games.
+
+    Each sub-call is wrapped in try/except so a failure in one does not
+    block the other.
+    """
+    try:
+        injury_client.refresh_injury_status(conn)
+    except Exception:
+        logger.exception("Injury status refresh failed — continuing.")
+
+    try:
+        odds_client.ensure_prop_lines_table(conn)
+        odds_client.fetch_todays_odds(conn)
+    except Exception:
+        logger.exception("Odds fetch failed — continuing.")
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -442,6 +464,8 @@ def run_update(db_path: str = DB_PATH) -> int:
             # Refresh season dashboards even when no new games (standings etc change).
             _refresh_season_dashboards(conn, SEASON)
             conn.commit()
+            # Refresh injury status and live odds for today's games.
+            _refresh_injuries_and_odds(conn)
             return 0
 
         logger.info(
@@ -457,6 +481,8 @@ def run_update(db_path: str = DB_PATH) -> int:
             conn.commit()
             _refresh_season_dashboards(conn, SEASON)
             conn.commit()
+            # Refresh injury status and live odds for today's games.
+            _refresh_injuries_and_odds(conn)
             return 0
 
         _upsert_players(raw, conn)
@@ -492,6 +518,9 @@ def run_update(db_path: str = DB_PATH) -> int:
             logger.info("Fetching advanced box scores for %d new games.", len(new_game_ids))
             initial_pull.populate_game_advanced_box_scores(conn, SEASON, new_game_ids)
             conn.commit()
+
+        # --- Refresh injury status and live odds for today's games ---
+        _refresh_injuries_and_odds(conn)
 
         logger.info(
             "=== Update complete. %d new log records added. ===", new_log_count

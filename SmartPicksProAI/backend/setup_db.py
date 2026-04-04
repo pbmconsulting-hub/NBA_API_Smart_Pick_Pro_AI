@@ -1367,6 +1367,27 @@ def create_tables(db_path: str = DB_PATH) -> None:
         logger.info("Creating engine pick-tracking table …")
         cursor.execute(CREATE_SAVED_PICKS)
 
+        # ---- Prop Lines cache table (Phase 5 — live odds) ----
+        logger.info("Creating Prop_Lines cache table …")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Prop_Lines (
+                player_name     TEXT    NOT NULL,
+                player_id       INTEGER,
+                stat_type       TEXT    NOT NULL,
+                line            REAL    NOT NULL,
+                over_price      INTEGER,
+                under_price     INTEGER,
+                bookmaker       TEXT    NOT NULL,
+                game_date       TEXT    NOT NULL,
+                fetched_at      TEXT    NOT NULL,
+                PRIMARY KEY (player_name, stat_type, bookmaker, game_date)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_prop_lines_player "
+            "ON Prop_Lines (player_id, stat_type, game_date)"
+        )
+
         # ==================================================================
         # Indexes — driven by the _INDEXES tuple for easy maintenance
         # ==================================================================
