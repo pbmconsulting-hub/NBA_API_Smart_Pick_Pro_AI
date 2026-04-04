@@ -1409,6 +1409,9 @@ _TIER_COLORS: dict[str, str] = {
     "Avoid": "#FF4444",
 }
 
+# Calibration gap (in pp) before flagging over/underconfidence on Model Health page.
+_CALIBRATION_GAP_THRESHOLD = 10
+
 
 def _page_prop_analyzer() -> None:
     """Interactive prop-analysis page powered by the engine modules."""
@@ -1441,15 +1444,19 @@ def _page_prop_analyzer() -> None:
 
         stat_type = st.selectbox("Stat type", _ANALYSIS_STAT_TYPES, key="prop_stat_type")
 
-        # Auto-populate prop line from DFS platforms when player is selected
+        # Auto-populate prop line from DFS platforms when player/stat selection changes
         _default_line = 20.5
         if selected_player:
             _pid = selected_player.get("player_id")
-            if _pid:
+            _auto_key = f"{_pid}_{stat_type}"
+            if _pid and st.session_state.get("_prop_auto_key") != _auto_key:
                 _dfs = get_dfs_lines(int(_pid), stat_type)
                 if _dfs.get("consensus"):
                     _default_line = round(float(_dfs["consensus"]) * 2) / 2  # nearest 0.5
+                    st.session_state["_prop_auto_key"] = _auto_key
                     st.caption(f"Auto-filled from DFS platforms: {_default_line}")
+            elif st.session_state.get("_prop_auto_key") == _auto_key:
+                pass  # Keep the user's manual edit
 
         prop_line = st.number_input("Prop line", min_value=0.5, value=_default_line, step=0.5, key="prop_line_input")
 
@@ -1832,12 +1839,13 @@ def _page_prop_analyzer() -> None:
     # TAB 3: Simulation Chart
     # ══════════════════════════════════════════════════════════════
     with tab_sim:
+        import numpy as np
+
         st.subheader("📊 Simulation Distribution")
         # Build a histogram from simulation percentiles / distribution data
         sim_distribution = sim.get("distribution", [])
         sim_mean = sim.get("simulated_mean", 0)
         if sim_distribution:
-            import numpy as np
             sim_arr = np.array(sim_distribution, dtype=float)
             # Create histogram data
             hist_counts, bin_edges = np.histogram(sim_arr, bins=40)
@@ -1854,9 +1862,8 @@ def _page_prop_analyzer() -> None:
             p10 = sim.get("percentile_10", sim_mean * 0.7)
             p50 = sim.get("percentile_50", sim_mean)
             p90 = sim.get("percentile_90", sim_mean * 1.3)
-            import numpy as np
-            # Approximate distribution using normal fit from percentiles
-            std_est = max((p90 - p10) / 2.56, 1.0)  # 10th-90th span ≈ 2.56σ
+            # p10 to p90 spans ±1.28σ from mean in a normal distribution (total 2.56σ)
+            std_est = max((p90 - p10) / 2.56, 1.0)
             sim_arr = np.random.normal(loc=sim_mean, scale=std_est, size=5000)
             sim_arr = np.clip(sim_arr, 0, None)
             hist_counts, bin_edges = np.histogram(sim_arr, bins=40)
@@ -2463,9 +2470,9 @@ def _page_model_health() -> None:
             # Flag over/underconfidence
             for row in tier_rows:
                 gap = row.get("Calibration Gap")
-                if gap is not None and gap < -10:
+                if gap is not None and gap < -_CALIBRATION_GAP_THRESHOLD:
                     st.warning(f"⚠️ **{row['Tier']}** tier is overconfident by {abs(gap):.0f}pp")
-                elif gap is not None and gap > 10:
+                elif gap is not None and gap > _CALIBRATION_GAP_THRESHOLD:
                     st.success(f"✅ **{row['Tier']}** tier is underconfident by {gap:.0f}pp — model is conservative")
 
     # ── Overconfidence Buckets ────────────────────────────────────

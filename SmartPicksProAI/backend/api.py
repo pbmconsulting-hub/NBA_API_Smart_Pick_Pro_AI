@@ -2464,7 +2464,7 @@ def train_models_endpoint():
 def get_dfs_lines_endpoint(player_id: int, stat_type: str = "points") -> dict:
     """Return DFS platform prop lines and consensus for a player + stat type."""
     try:
-        import odds_client
+        import odds_client  # lazy import — consistent with other endpoints in this module
         with _db() as conn:
             all_lines = odds_client.get_all_platform_lines(conn, player_id, stat_type)
             if all_lines:
