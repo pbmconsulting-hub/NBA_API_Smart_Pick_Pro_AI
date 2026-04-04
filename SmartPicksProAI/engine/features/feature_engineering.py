@@ -224,6 +224,86 @@ def calculate_defensive_matchup_factor(
     return opp_drtg / league_avg_drtg
 
 
+def _calculate_usage_rate_trend(game_logs: List[Dict[str, Any]], window: int = 5) -> float:
+    """Calculate usage rate trend over the last N games.
+
+    Positive = trending up, negative = trending down.
+
+    Args:
+        game_logs: List of game log dicts (chronological order).
+        window: Number of recent games to compare.
+
+    Returns:
+        Trend value (slope of USG% over the window), or 0.0 if insufficient data.
+    """
+    if len(game_logs) < window:
+        return 0.0
+    try:
+        from engine.features.player_metrics import calculate_usage_rate
+        recent = game_logs[-window:]
+        usg_rates = []
+        for g in recent:
+            fga = float(g.get("fga", 0))
+            fta = float(g.get("fta", 0))
+            tov = float(g.get("tov", 0))
+            team_fga = float(g.get("team_fga", fga * 5))
+            team_fta = float(g.get("team_fta", fta * 5))
+            team_tov = float(g.get("team_tov", tov * 5))
+            mp = float(g.get("mp", g.get("min", 0)) or 0)
+            team_mp = float(g.get("team_mp", 240))
+            if mp > 0 and team_mp > 0:
+                usg = calculate_usage_rate(fga, fta, tov, team_fga, team_fta, team_tov, mp, team_mp)
+                usg_rates.append(usg)
+        if len(usg_rates) < 2:
+            return 0.0
+        # Simple linear trend: difference between second-half and first-half averages
+        mid = len(usg_rates) // 2
+        first_half = sum(usg_rates[:mid]) / mid
+        second_half = sum(usg_rates[mid:]) / len(usg_rates[mid:])
+        return second_half - first_half
+    except Exception:
+        return 0.0
+
+
+def _calculate_hot_cold_streak(game_logs: List[Dict[str, Any]], stat_key: str = "pts",
+                                window: int = 5) -> Dict[str, float]:
+    """Detect hot/cold streaks beyond rolling averages.
+
+    Args:
+        game_logs: List of game log dicts (chronological order).
+        stat_key: Which stat to measure streak for.
+        window: Number of recent games.
+
+    Returns:
+        Dict with streak_ratio (recent / season) and days_since_big_game.
+    """
+    result = {"streak_ratio": 1.0, "days_since_big_game": 30.0}
+    if not game_logs:
+        return result
+    try:
+        all_vals = [float(g.get(stat_key, 0)) for g in game_logs if g.get(stat_key) is not None]
+        if not all_vals or len(all_vals) < window:
+            return result
+        season_avg = sum(all_vals) / len(all_vals)
+        recent_vals = all_vals[-window:]
+        recent_avg = sum(recent_vals) / len(recent_vals)
+        if season_avg > 0:
+            result["streak_ratio"] = recent_avg / season_avg
+
+        # Days since last "big game" (≥ 1.5x season average)
+        big_threshold = season_avg * 1.5
+        days_since = 30.0
+        for i, g in enumerate(reversed(game_logs)):
+            val = float(g.get(stat_key, 0))
+            if val >= big_threshold:
+                days_since = float(i)
+                break
+        result["days_since_big_game"] = days_since
+    except Exception:
+        pass
+    return result
+
+
 def build_feature_matrix(
     player_data: Dict[str, Any],
     team_data: Dict[str, Any],
@@ -236,7 +316,7 @@ def build_feature_matrix(
         player_data: Player stats dict (with rolling averages, etc.).
         team_data: Team stats dict.
         opponent_data: Opponent stats dict.
-        game_context: Game context (rest_days, location, pace, etc.).
+        game_context: Game context (rest_days, location, pace, odds, etc.).
 
     Returns:
         Flat feature dict suitable for ML model input.
@@ -271,6 +351,57 @@ def build_feature_matrix(
 
     opp_drtg = float(game_context.get("opponent_drtg", LEAGUE_AVG_DRTG))
     features["defensive_matchup_factor"] = calculate_defensive_matchup_factor(opp_drtg)
+
+    # ── Usage rate trend (is USG% trending up or down?) ──────────────────
+    game_logs = game_context.get("game_logs", [])
+    features["usage_rate_trend"] = _calculate_usage_rate_trend(game_logs)
+
+    # ── Hot/cold streak detection ────────────────────────────────────────
+    streak = _calculate_hot_cold_streak(game_logs)
+    features["streak_ratio"] = streak["streak_ratio"]
+    features["days_since_big_game"] = streak["days_since_big_game"]
+
+    # ── Opponent per-position defensive rating (DvP) ─────────────────────
+    # If the game_context has position-specific DvP multipliers, use them
+    # to adjust the defensive matchup factor for this player's position.
+    dvp_mult = game_context.get("dvp_multiplier")
+    if dvp_mult is not None:
+        features["dvp_position_multiplier"] = float(dvp_mult)
+    else:
+        # Check for stat-specific DvP multipliers already in game_context
+        for dvp_key in ("dvp_vs_pts_mult", "dvp_vs_reb_mult", "dvp_vs_ast_mult",
+                        "dvp_vs_stl_mult", "dvp_vs_blk_mult", "dvp_vs_3pm_mult"):
+            val = game_context.get(dvp_key)
+            if val is not None:
+                features[dvp_key] = float(val)
+
+    # ── Vegas total and spread ───────────────────────────────────────────
+    vegas_total = game_context.get("vegas_total") or game_context.get("game_total")
+    if vegas_total is not None:
+        features["vegas_total"] = float(vegas_total)
+    vegas_spread = game_context.get("vegas_spread") or game_context.get("spread")
+    if vegas_spread is not None:
+        features["vegas_spread"] = float(vegas_spread)
+
+    # ── Matchup history: player vs. this specific opponent ───────────────
+    matchup_avg = game_context.get("matchup_avg_vs_team")
+    if matchup_avg is not None:
+        features["matchup_avg_vs_team"] = float(matchup_avg)
+    matchup_favorability = game_context.get("matchup_favorability_score")
+    if matchup_favorability is not None:
+        features["matchup_favorability_score"] = float(matchup_favorability)
+    matchup_adjustment = game_context.get("matchup_adjustment")
+    if matchup_adjustment is not None:
+        features["matchup_adjustment"] = float(matchup_adjustment)
+
+    # ── BPM (Box Plus/Minus) ─────────────────────────────────────────────
+    try:
+        from engine.features.player_metrics import calculate_bpm
+        if player_data:
+            bpm = calculate_bpm(player_data)
+            features["player_bpm"] = bpm
+    except Exception:
+        pass
 
     # Travel fatigue — use utils.geo when team abbreviations are available,
     # fall back to city-name-based calculation within this module.

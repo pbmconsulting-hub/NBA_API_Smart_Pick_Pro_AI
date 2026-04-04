@@ -107,6 +107,13 @@ model_hyperparameters:
     learning_rate: 0.05
     l2_leaf_reg: 3.0
     verbose: 0
+  lightgbm:
+    n_estimators: 300
+    max_depth: 6
+    learning_rate: 0.05
+    num_leaves: 31
+    subsample: 0.8
+    colsample_bytree: 0.8
 
 # ── Slate generator defaults ─────────────────────────────────
 slate:

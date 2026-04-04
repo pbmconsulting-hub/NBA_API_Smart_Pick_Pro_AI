@@ -42,20 +42,20 @@ def _load_best_model(stat_type: str):
     return None
 
 
-def _fetch_player_data(player_name: str) -> dict:
+def _fetch_player_data(player_name: str) -> tuple:
     """Look up a player's recent game logs from the DB and compute rolling averages.
 
     Args:
         player_name: Player's full name.
 
     Returns:
-        Dict of player stats (rolling averages and season averages).
+        Tuple of (player_stats dict, game_logs list).
     """
     try:
         from engine.features.feature_engineering import calculate_rolling_averages
 
         if not os.path.exists(_DB_PATH):
-            return {}
+            return {}, []
         conn = sqlite3.connect(_DB_PATH)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
@@ -72,7 +72,7 @@ def _fetch_player_data(player_name: str) -> dict:
         conn.close()
 
         if not rows:
-            return {}
+            return {}, []
 
         # Compute rolling averages over recent game logs
         rolling = calculate_rolling_averages(rows)
@@ -83,10 +83,10 @@ def _fetch_player_data(player_name: str) -> dict:
             if isinstance(v, (int, float)):
                 rolling.setdefault(k, float(v))
 
-        return rolling
+        return rolling, rows
     except Exception as exc:
         _logger.debug("_fetch_player_data failed for %s: %s", player_name, exc)
-        return {}
+        return {}, []
 
 
 def _fetch_team_data(player_name: str) -> tuple:
@@ -179,13 +179,37 @@ def predict_player_stat(
         import numpy as np
 
         # Look up actual player/team data from the database
-        player_data = _fetch_player_data(player_name)
+        player_data, game_logs = _fetch_player_data(player_name)
         team_data, opp_abbrev = _fetch_team_data(player_name)
         # Allow game_context to supply opponent abbreviation
         opp_abbrev = game_context.get("opponent_abbrev", opp_abbrev)
         opponent_data = _fetch_opponent_data(opp_abbrev)
 
-        features = build_feature_matrix(player_data, team_data, opponent_data, game_context)
+        # Enrich game_context with game_logs for streak/usage trend features
+        enriched_ctx = dict(game_context)
+        enriched_ctx.setdefault("game_logs", game_logs)
+
+        # Enrich with matchup history if opponent is known
+        if opp_abbrev and game_logs:
+            try:
+                from engine.matchup_history import get_player_vs_team_history
+                # Map short stat types to matchup_history's stat type names
+                stat_map = {
+                    "pts": "points", "reb": "rebounds", "ast": "assists",
+                    "stl": "steals", "blk": "blocks", "tov": "turnovers",
+                    "fg3m": "threes", "ftm": "points",
+                }
+                matchup_stat = stat_map.get(stat_type, stat_type)
+                history = get_player_vs_team_history(
+                    player_name, opp_abbrev, matchup_stat, game_logs
+                )
+                if history and not history.get("cold_start"):
+                    enriched_ctx["matchup_avg_vs_team"] = history.get("avg_vs_team")
+                    enriched_ctx["matchup_favorability_score"] = history.get("matchup_favorability_score")
+            except Exception as exc:
+                _logger.debug("matchup enrichment failed: %s", exc)
+
+        features = build_feature_matrix(player_data, team_data, opponent_data, enriched_ctx)
         X = np.array([list(features.values())], dtype=float)
 
         model = _load_best_model(stat_type)
