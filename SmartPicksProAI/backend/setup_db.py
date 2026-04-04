@@ -1306,6 +1306,7 @@ def create_tables(db_path: str = DB_PATH) -> None:
     logger.info("Connecting to database: %s", db_path)
     conn = sqlite3.connect(db_path)
     try:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         cursor = conn.cursor()
 

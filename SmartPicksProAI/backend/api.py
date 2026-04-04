@@ -101,6 +101,7 @@ def _db() -> Generator[sqlite3.Connection, None, None]:
         An open :class:`sqlite3.Connection` with ``row_factory`` configured.
     """
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -173,6 +174,7 @@ def _get_conn() -> sqlite3.Connection:
         by column name).
     """
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1732,11 +1734,11 @@ def get_todays_picks():
 
 @app.post("/api/admin/train-models")
 def train_models_endpoint():
-    """Trigger ML model training for pts, reb, ast."""
+    """Trigger ML model training for all prop-relevant stats."""
     try:
         from engine.models.train import train_models
         results = {}
-        for stat in ["pts", "reb", "ast"]:
+        for stat in ["pts", "reb", "ast", "stl", "blk", "tov", "fg3m", "ftm"]:
             results[stat] = train_models(stat)
         return {"status": "success", "results": results}
     except Exception as exc:

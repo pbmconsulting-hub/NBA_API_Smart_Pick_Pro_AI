@@ -1952,6 +1952,7 @@ def run_initial_pull(db_path: str = DB_PATH, season: str = SEASON) -> None:
     setup_db.create_tables(db_path)
 
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     try:
         seed_teams_from_api(conn)
         conn.commit()
@@ -1970,6 +1971,7 @@ def run_initial_pull(db_path: str = DB_PATH, season: str = SEASON) -> None:
     team_stats_df = build_team_game_stats_df(raw_team)
 
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     try:
         load_players(players_df, conn)
         load_games(games_df, conn)

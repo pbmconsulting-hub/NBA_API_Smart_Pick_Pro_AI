@@ -18,6 +18,7 @@ def _read_todays_games(db_path: str) -> list:
     today = datetime.date.today().isoformat()
     try:
         conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("SELECT * FROM Games WHERE game_date = ?", (today,))
@@ -33,6 +34,7 @@ def _read_player_stats(db_path: str) -> list:
     """Read recent player game logs from smartpicks.db."""
     try:
         conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
