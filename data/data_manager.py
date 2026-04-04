@@ -16,6 +16,9 @@ import pandas as pd
 _logger = logging.getLogger(__name__)
 
 # ── Data directory paths ────────────────────────────────────────────────
+# DATA_DIR is the root-level data/ directory (seed CSVs live here).
+# When SmartPicksProAI/data/ exists (raw/processed/ml_ready) we prefer
+# those sub-dirs; otherwise fall back to sub-dirs under data/.
 
 DATA_DIR = Path(__file__).resolve().parent
 PKG_DATA_DIR = DATA_DIR.parent / "SmartPicksProAI" / "data"

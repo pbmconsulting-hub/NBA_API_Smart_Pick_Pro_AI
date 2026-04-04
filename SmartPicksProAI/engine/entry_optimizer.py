@@ -173,6 +173,18 @@ def validate_entry(
     }
 
 
+# ── Scoring weights and normalisation ───────────────────────────────────
+
+# Confidence is on a 0-100 scale; divide by 100 to normalise to [0, 1].
+_CONF_NORMALISER = 100.0
+# Edges above 20% are capped at 1.0 to prevent outsized influence.
+_EDGE_CAP = 20.0
+# Relative weights for the three scoring components.
+_W_CONFIDENCE = 0.4
+_W_EDGE = 0.4
+_W_CORRELATION = 0.2
+
+
 # ── Scoring function ────────────────────────────────────────────────────
 
 
@@ -193,7 +205,11 @@ def _score_combination(
     penalty = _correlation_penalty(list(combo))
 
     # Weighted score: confidence (40%) + edge (40%) - correlation (20%)
-    score = (avg_conf / 100.0) * 0.4 + min(avg_edge / 20.0, 1.0) * 0.4 - penalty * 0.2
+    score = (
+        (avg_conf / _CONF_NORMALISER) * _W_CONFIDENCE
+        + min(avg_edge / _EDGE_CAP, 1.0) * _W_EDGE
+        - penalty * _W_CORRELATION
+    )
     return score
 
 
