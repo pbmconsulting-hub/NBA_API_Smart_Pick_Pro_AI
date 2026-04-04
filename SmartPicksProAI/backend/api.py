@@ -17,7 +17,7 @@ import logging
 import sqlite3
 import sys
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Generator
 
