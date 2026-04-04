@@ -682,7 +682,8 @@ def build_player_projection(
 
     # --- Factor 5b: Implied Pace from Game Total ---
     # Higher totals imply faster pace → more possessions → more counting stats.
-    # Scale by deviation from 230 (typical high-total baseline).
+    # 230 is the midpoint of typical NBA game totals (range ~205–250).
+    # The 0.15 coefficient gives ~1–3% adjustment for most games, capped ±7%.
     game_total_implied_pace = 1.0
     if game_total > 0:
         game_total_implied_pace = 1.0 + ((game_total - 230.0) / 230.0) * 0.15

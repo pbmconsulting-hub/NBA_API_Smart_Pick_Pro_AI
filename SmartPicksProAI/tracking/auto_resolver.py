@@ -59,20 +59,12 @@ def _get_box_scores_for_date(date_str: str) -> list[dict]:
     ``tov``, ``fg3m``, ``ftm``.
     """
     try:
-        from nba_api.stats.endpoints import PlayerGameLog
-        from nba_api.stats.static import players as nba_players
+        from nba_api.stats.endpoints import ScoreboardV2  # noqa: F811
     except ImportError:
         _logger.info("nba_api not available for auto-resolve.")
         return []
 
-    # The NBA API uses season format like "2025-26"
-    today = datetime.date.today()
-    season_year = today.year if today.month >= 10 else today.year - 1
-    season = f"{season_year}-{str(season_year + 1)[-2:]}"
-
     try:
-        # Use leaguegamefinder or scoreboard for a specific date
-        from nba_api.stats.endpoints import ScoreboardV2
         sb = ScoreboardV2(game_date=date_str)
         game_headers = sb.get_normalized_dict().get("GameHeader", [])
         if not game_headers:
