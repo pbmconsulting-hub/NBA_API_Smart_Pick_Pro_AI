@@ -349,17 +349,25 @@ def render() -> None:
             if _team_id:
                 roster_data = get_team_roster(int(_team_id))
                 if roster_data:
-                    # Build a mini player dict from bio/last5
+                    # Build a mini player dict from bio/career data (more
+                    # reliable than volatile last-5 averages).
+                    _bio_stats = bio if bio else {}
+                    _last5_avgs = last5.get("averages", {}) if last5 else {}
+
+                    def _stat(key):
+                        """Return season/bio avg if available, else last-5."""
+                        return float(_bio_stats.get(key, 0) or 0) or float(_last5_avgs.get(key, 0) or 0)
+
                     _player_dict = {
                         "player_id": pid,
                         "name": player_name,
-                        "position": bio.get("position", "G") if bio else "G",
-                        "pts": last5.get("averages", {}).get("pts", 0) if last5 else 0,
-                        "reb": last5.get("averages", {}).get("reb", 0) if last5 else 0,
-                        "ast": last5.get("averages", {}).get("ast", 0) if last5 else 0,
-                        "stl": last5.get("averages", {}).get("stl", 0) if last5 else 0,
-                        "blk": last5.get("averages", {}).get("blk", 0) if last5 else 0,
-                        "min": last5.get("averages", {}).get("min", 0) if last5 else 0,
+                        "position": _bio_stats.get("position", "G"),
+                        "pts": _stat("pts"),
+                        "reb": _stat("reb"),
+                        "ast": _stat("ast"),
+                        "stl": _stat("stl"),
+                        "blk": _stat("blk"),
+                        "min": _stat("min"),
                     }
 
                     # Build teammate dicts from roster

@@ -673,10 +673,12 @@ def run_quantum_matrix_simulation(
             # Convert to p = r/(r+mu) for numpy parametrisation
             p_arr = r_arr / (r_arr + mu_arr)
             p_arr = np.clip(p_arr, 0.01, 0.99)
-            # Vectorized negative binomial draw — numpy accepts arrays for n and p
+            # Vectorized negative binomial draw — numpy requires integer n
             r_safe = np.maximum(np.asarray(r_arr, dtype=np.float64), 0.5)
             p_safe = np.asarray(p_arr, dtype=np.float64)
-            all_results = rng.negative_binomial(r_safe, p_safe).astype(np.float64)
+            r_int = np.round(r_safe).astype(np.int64)
+            r_int = np.maximum(r_int, 1)
+            all_results = rng.negative_binomial(r_int, p_safe).astype(np.float64)
         else:
             # Turnovers: Poisson (variance ≈ mean)
             all_results = rng.poisson(lam_arr).astype(np.float64)

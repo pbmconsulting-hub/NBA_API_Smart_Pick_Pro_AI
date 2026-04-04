@@ -18,7 +18,7 @@ def render() -> None:
     st.title("📋 Pick History")
     st.caption("Track your saved prop analyses and record outcomes.")
 
-    picks = get_pick_history(limit=100)
+    picks = get_pick_history(limit=500)
 
     if not picks:
         st.info("No saved picks yet.  Use the **Prop Analyzer** to analyze and save picks.")
@@ -45,7 +45,7 @@ def render() -> None:
         for p in picks:
             kf = float(p.get("kelly_fraction", 0) or 0)
             if kf <= 0:
-                kf = 0.01  # minimum fraction for decided picks
+                continue  # Skip no-bet picks in Kelly mode
             if p.get("result") == "hit":
                 kelly_profit += kf * 0.909  # payout at -110
                 kelly_risked += kf

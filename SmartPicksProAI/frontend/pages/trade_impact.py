@@ -1,7 +1,10 @@
 """Trade Impact page — evaluate how trades affect player projections."""
+import logging
 import streamlit as st
 from pages._shared import nav, show_df
 from api_service import search_players, get_teams
+
+_logger = logging.getLogger(__name__)
 
 
 def render() -> None:
@@ -104,6 +107,16 @@ def render() -> None:
             except Exception:
                 fit_result = {}
 
+            # Call evaluate_trade — old team loses the player, new team gains
+            try:
+                trade_result = evaluate_trade(
+                    outgoing_players=[],
+                    incoming_players=[player_data],
+                )
+            except Exception as _te:
+                _logger.debug("evaluate_trade error: %s", _te)
+                trade_result = {}
+
         st.divider()
         st.subheader(f"📋 {player_name}: {old_team} → {new_team_abbrev}")
 
@@ -113,6 +126,77 @@ def render() -> None:
         tc[1].metric("New Team", new_team_abbrev)
         tc[2].metric("Position", player_data.get("position", "?"))
         tc[3].metric("PPG (Old Role)", f"{player_data.get('pts', 0):.1f}")
+
+        # Display evaluate_trade results — Before vs After comparison
+        if trade_result and trade_result.get("grade"):
+            st.divider()
+            st.markdown("**📊 Trade Evaluation**")
+            te_cols = st.columns([1, 1, 1, 1])
+            te_cols[0].metric("Grade", trade_result.get("grade", "N/A"))
+            te_cols[1].metric("Winner", trade_result.get("winner", "N/A"))
+            te_cols[2].metric("WAR Change", f"{trade_result.get('net_war_change', 0):+.2f}")
+            te_cols[3].metric(
+                "Fit Improvement",
+                f"{trade_result.get('fit_improvement', 0):.0f}/100",
+            )
+            joseph_take = trade_result.get("joseph_take", "")
+            if joseph_take:
+                st.info(f"🗣️ **Joseph's Take:** {joseph_take}")
+
+            # Before → After stat projection table
+            breakdown = trade_result.get("breakdown", {})
+            if breakdown:
+                st.markdown("**Before → After Breakdown**")
+                bd_cols = st.columns([1, 1, 1])
+                bd_cols[0].metric(
+                    "Outgoing WAR",
+                    f"{breakdown.get('outgoing_war', 0):.2f}",
+                )
+                bd_cols[1].metric(
+                    "Incoming WAR",
+                    f"{breakdown.get('incoming_war', 0):.2f}",
+                )
+                bd_cols[2].metric(
+                    "Composite Score",
+                    f"{breakdown.get('composite_score', 0):.1f}/100",
+                )
+
+        # Show projected stat changes (Before vs After)
+        if fit_result and fit_result.get("projected_usage"):
+            st.divider()
+            st.markdown("**📈 Projected Stat Changes (Before → After)**")
+            old_usage = float(selected_player.get("usg_pct", 0) or 0) * 100
+            new_usage = float(fit_result.get("projected_usage", old_usage))
+            usage_ratio = new_usage / max(old_usage, 0.1) if old_usage > 0 else 1.0
+            old_min = player_data.get("min", 0)
+
+            import pandas as _pd
+            stat_rows = []
+            for lbl, key in [("PTS", "pts"), ("REB", "reb"), ("AST", "ast"),
+                              ("STL", "stl"), ("BLK", "blk"), ("TOV", "tov")]:
+                old_val = player_data.get(key, 0)
+                new_val = round(old_val * usage_ratio, 1)
+                change = round(new_val - old_val, 1)
+                stat_rows.append({
+                    "Stat": lbl,
+                    "Old Team": f"{old_val:.1f}",
+                    "New Team (Proj)": f"{new_val:.1f}",
+                    "Change": f"{change:+.1f}",
+                })
+            # Add usage and minutes
+            stat_rows.append({
+                "Stat": "USG%",
+                "Old Team": f"{old_usage:.1f}%",
+                "New Team (Proj)": f"{new_usage:.1f}%",
+                "Change": f"{new_usage - old_usage:+.1f}%",
+            })
+            stat_rows.append({
+                "Stat": "MIN",
+                "Old Team": f"{old_min:.1f}",
+                "New Team (Proj)": f"{old_min * usage_ratio:.1f}",
+                "Change": f"{old_min * usage_ratio - old_min:+.1f}",
+            })
+            st.dataframe(_pd.DataFrame(stat_rows), use_container_width=True, hide_index=True)
 
         if fit_result and "error" not in fit_result:
             st.divider()
@@ -136,7 +220,7 @@ def render() -> None:
                 st.markdown("**Notes**")
                 for n in notes:
                     st.info(n)
-        else:
+        elif not trade_result or not trade_result.get("grade"):
             st.info(
                 "Trade impact evaluation uses real roster data when available.  "
                 "With limited data, showing basic role comparison."

@@ -257,8 +257,8 @@ def render() -> None:
                 st.info(bt_result["message"])
             else:
                 bt_m = st.columns([1, 1, 1, 1])
-                bt_m[0].metric("Total Plays", bt_result.get("total_plays", 0))
-                bt_acc = bt_result.get("accuracy", 0)
+                bt_m[0].metric("Total Picks", bt_result.get("total_picks", 0))
+                bt_acc = bt_result.get("win_rate", 0)
                 bt_m[1].metric("Accuracy", f"{bt_acc:.1%}" if bt_acc else "N/A")
                 bt_roi = bt_result.get("roi", 0)
                 bt_m[2].metric("ROI", f"{bt_roi:+.1f}%" if bt_roi else "N/A")
