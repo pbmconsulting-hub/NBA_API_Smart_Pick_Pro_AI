@@ -59,6 +59,13 @@ LAST_N_GAMES_DEFAULT = 5
 MAX_SEASON_GAMES = 82
 TEAM_STATS_DEFAULT_LIMIT = 10
 
+# Slate generator / analysis defaults
+_SLATE_DEFAULT_GAME_TOTAL = 220.0  # League-average game total when live data unavailable
+_SLATE_DEFAULT_VEGAS_SPREAD = 0.0  # Neutral spread when live data unavailable
+_SLATE_MIN_GAMES_FOR_ANALYSIS = 5  # Minimum game logs needed for meaningful analysis
+_INJURY_MINUTES_BOOST_PER_OUT = 0.03  # ~3% extra minutes/usage per teammate ruled Out/Doubtful
+_STANDARD_JUICE_ODDS = 110.0  # Standard -110 American odds for breakeven calculation
+
 app = FastAPI(
     title="SmartPicksProAI API",
     description="NBA player stats and game data for ML-powered prop predictions.",
@@ -1312,7 +1319,7 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             ]
             if out_players:
                 # Each key player out adds ~3-5% extra minutes/usage
-                _minutes_adj_factor = 1.0 + 0.03 * len(out_players)
+                _minutes_adj_factor = 1.0 + _INJURY_MINUTES_BOOST_PER_OUT * len(out_players)
                 _teammate_out_notes = "; ".join(
                     f"{p.get('full_name', 'Unknown')} ({p.get('status', '?')}: {p.get('reason', 'N/A')})"
                     for p in out_players
@@ -1917,7 +1924,7 @@ def generate_daily_slate(
                     (player_id, MAX_SEASON_GAMES),
                     label="slate/logs",
                 )
-                if len(season_logs) < 5:
+                if len(season_logs) < _SLATE_MIN_GAMES_FOR_ANALYSIS:
                     continue  # Not enough data for meaningful analysis
 
                 engine_logs = build_engine_game_logs(season_logs)
@@ -1931,11 +1938,11 @@ def generate_daily_slate(
                         opponent_team_abbreviation=opp_abbrev,
                         is_home_game=is_home,
                         rest_days=rest_days,
-                        game_total=220.0,
+                        game_total=_SLATE_DEFAULT_GAME_TOTAL,
                         defensive_ratings_data=defense_data,
                         teams_data=teams_data,
                         recent_form_games=recent_5,
-                        vegas_spread=0.0,
+                        vegas_spread=_SLATE_DEFAULT_VEGAS_SPREAD,
                     )
                 except Exception:
                     continue
@@ -2000,8 +2007,8 @@ def generate_daily_slate(
                             recent_game_logs=(
                                 recent_values if len(recent_values) >= 10 else None
                             ),
-                            vegas_spread=0.0,
-                            game_total=220.0,
+                            vegas_spread=_SLATE_DEFAULT_VEGAS_SPREAD,
+                            game_total=_SLATE_DEFAULT_GAME_TOTAL,
                         )
                     except Exception:
                         continue
@@ -2010,8 +2017,8 @@ def generate_daily_slate(
                     direction = "OVER" if prob_over >= 0.5 else "UNDER"
                     model_prob = prob_over if direction == "OVER" else (1.0 - prob_over)
 
-                    # Edge
-                    implied_prob_minus_110 = 110.0 / (110.0 + 100.0)
+                    # Edge (vs standard -110 breakeven of 52.38%)
+                    implied_prob_minus_110 = _STANDARD_JUICE_ODDS / (_STANDARD_JUICE_ODDS + 100.0)
                     edge_pct = round((model_prob - implied_prob_minus_110) * 100, 2)
 
                     if edge_pct < min_edge:
@@ -2022,8 +2029,8 @@ def generate_daily_slate(
                         "opponent": opp_abbrev,
                         "is_home": is_home,
                         "rest_days": rest_days,
-                        "game_total": 220.0,
-                        "vegas_spread": 0.0,
+                        "game_total": _SLATE_DEFAULT_GAME_TOTAL,
+                        "vegas_spread": _SLATE_DEFAULT_VEGAS_SPREAD,
                     }
                     try:
                         forces = analyze_directional_forces(

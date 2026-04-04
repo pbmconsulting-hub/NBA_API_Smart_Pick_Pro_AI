@@ -45,6 +45,7 @@ _BASE_URL = "https://api.the-odds-api.com"
 _SPORT = "basketball_nba"
 _REGIONS = "us"
 _ODDS_FORMAT = "american"
+_REQUEST_TIMEOUT = 15
 
 # Mapping from The Odds API market names to our internal stat_type names
 _MARKET_TO_STAT: dict[str, str] = {
@@ -261,7 +262,7 @@ def _fetch_events(api_key: str) -> list[dict]:
         "apiKey": api_key,
         "dateFormat": "iso",
     }
-    resp = requests.get(url, params=params, timeout=15)
+    resp = requests.get(url, params=params, timeout=_REQUEST_TIMEOUT)
     resp.raise_for_status()
     events = resp.json()
     # Filter to today's events
@@ -287,7 +288,7 @@ def _fetch_player_props(
         "markets": market_key,
         "oddsFormat": _ODDS_FORMAT,
     }
-    resp = requests.get(url, params=params, timeout=15)
+    resp = requests.get(url, params=params, timeout=_REQUEST_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
 

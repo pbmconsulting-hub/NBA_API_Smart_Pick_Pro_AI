@@ -45,6 +45,8 @@ _CBS_INJURIES_URL = "https://www.cbssports.com/nba/injuries/"
 # NBA official injury report JSON
 _NBA_INJURY_URL = "https://cdn.nba.com/static/json/liveData/injuries/injuries_current.json"
 
+_REQUEST_TIMEOUT = 15
+
 # Fallback: nba_api roster-based approach
 _ROSTER_FALLBACK = True
 
@@ -202,7 +204,7 @@ def get_player_injury_status(
 def _fetch_nba_cdn_injuries() -> list[dict]:
     """Fetch injuries from the NBA's official CDN JSON feed."""
     try:
-        resp = requests.get(_NBA_INJURY_URL, timeout=15, headers={
+        resp = requests.get(_NBA_INJURY_URL, timeout=_REQUEST_TIMEOUT, headers={
             "User-Agent": "SmartPicksProAI/1.0",
             "Accept": "application/json",
         })
