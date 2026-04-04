@@ -73,10 +73,9 @@ GOLD_MIN_PROBABILITY = 0.57       # No Gold below 57% win probability (was 0.55)
 # Auto-AVOID: coefficient of variation above this → automatically avoid
 AUTO_AVOID_CV_THRESHOLD = 0.45    # CV > 0.45 → auto-AVOID (loosened from 0.40 to reduce over-filtering)
 # Score below this threshold → "Do Not Bet" / Avoid tier.
-# 35/100 corresponds roughly to a coin-flip bet with marginal edge that is unlikely
-# to be profitable long-term after accounting for vig deduction. Based on analysis
-# of historical pick performance where scores below 35 showed negative expected value.
-DO_NOT_BET_SCORE_THRESHOLD = 35
+# 45/100 ensures we only pass picks with meaningful edge. Picks in the 35-45
+# range showed marginal or negative expected value after vig deduction.
+DO_NOT_BET_SCORE_THRESHOLD = 45
 # Combo-stat confidence penalty multiplier.
 # Combo stats (points_rebounds, etc.) have more variance than simple stats.
 COMBO_STAT_CONFIDENCE_MULTIPLIER = 0.90  # was 0.85 — softened penalty so combo stats aren't over-penalized

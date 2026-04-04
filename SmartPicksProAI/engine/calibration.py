@@ -15,6 +15,9 @@
 #                   reliability diagrams, calibration offset
 # ============================================================
 import math
+import numpy as np
+from datetime import date as _date, timedelta
+import datetime as _dt
 def _safe_float(value, fallback=0.0):
     """Return *value* if it is a finite float, otherwise *fallback*.
     Last-line-of-defence guard that prevents NaN or ±inf from leaking
@@ -108,18 +111,20 @@ def _load_historical_predictions(days=90, stat_type=None):
                 r for r in records
                 if (r.get("stat_type") or "").lower() == stat_lower
             ]
-        # Apply recency weighting: duplicate records from last 30 days
-        # BEGINNER NOTE: More recent data is more representative of current
-        # model performance. We give it 2x weight by duplicating recent records.
+        # Apply exponential decay weighting: assign float weights to each record
+        # based on how many days old it is, using exp(-λ * days_old).
+        # λ = 0.05 means half-life ≈ 14 days: records 14 days old get ~50% weight,
+        # records 30 days old get ~22% weight, records 60 days old get ~5% weight.
+        _DECAY_LAMBDA = 0.05  # Exponential decay rate
+
         weighted_records = []
+        weights = []
+        today = _date.today()
         for r in records:
-            weighted_records.append(r)
-            # Check if record is recent (last 30 days)
             record_date = r.get("date", r.get("created_at", ""))
+            days_old = 45.0  # Default age if date unknown (moderate weight)
             if record_date:
                 try:
-                    from datetime import date as _date, timedelta
-                    import datetime as _dt
                     if isinstance(record_date, str) and len(record_date) >= 10:
                         record_date_parsed = _dt.datetime.strptime(record_date[:10], "%Y-%m-%d").date()
                     elif not isinstance(record_date, str):
@@ -127,35 +132,39 @@ def _load_historical_predictions(days=90, stat_type=None):
                     else:
                         record_date_parsed = None
                     if record_date_parsed is not None:
-                        cutoff = _date.today() - timedelta(days=30)
-                        if record_date_parsed >= cutoff:
-                            weighted_records.append(r)   # 2x weight for recent records
+                        days_old = max(0.0, float((today - record_date_parsed).days))
                 except (ValueError, TypeError, AttributeError):
                     pass
-        return weighted_records
+            weight = math.exp(-_DECAY_LAMBDA * days_old)
+            weighted_records.append(r)
+            weights.append(weight)
+        return weighted_records, weights
     except Exception:
-        return []
-def _build_calibration_curve(records):
+        return [], []
+def _build_calibration_curve(records, weights=None):
     """
     Build a calibration curve from historical prediction records.
     Groups predictions into probability buckets and computes the actual
-    hit rate within each bucket.
+    hit rate within each bucket, using sample weights when available.
     Args:
         records (list of dict): Historical prediction records.
+        weights (list of float or None): Per-record weights (exponential decay).
     Returns:
         dict: {bucket_midpoint: {'predicted': float, 'actual': float, 'count': int}}
         Empty dict if insufficient data.
     """
     if not records:
         return {}
+    if weights is None:
+        weights = [1.0] * len(records)
     # Initialize buckets: [0.50-0.60), [0.60-0.70), ..., [0.90-1.00)
     buckets = {}
     for b in range(5, 10):  # b=5 → [0.50-0.60), ..., b=9 → [0.90-1.00)
         low = b * CALIBRATION_BUCKET_WIDTH
         mid = round(low + CALIBRATION_BUCKET_WIDTH / 2.0, 3)
-        buckets[mid] = {"predicted": mid, "actual_sum": 0, "count": 0}
-    # Fill buckets
-    for record in records:
+        buckets[mid] = {"predicted": mid, "weighted_sum": 0.0, "weight_total": 0.0, "count": 0}
+    # Fill buckets with weighted contributions
+    for record, w in zip(records, weights):
         prob = float(record.get("probability_over", 0.5) or 0.5)
         result = int(record.get("result", 0) or 0)
         # Normalize probability to [0.5, 1.0) — we only track high-confidence picks
@@ -163,15 +172,16 @@ def _build_calibration_curve(records):
         # Find the bucket
         mid = _get_bucket_midpoint(prob, CALIBRATION_BUCKET_WIDTH)
         if mid in buckets:
-            buckets[mid]["actual_sum"] += result
+            buckets[mid]["weighted_sum"] += result * w
+            buckets[mid]["weight_total"] += w
             buckets[mid]["count"] += 1
-    # Compute actual hit rates
+    # Compute weighted actual hit rates
     curve = {}
     for mid, data in buckets.items():
-        if data["count"] >= MIN_BETS_FOR_CALIBRATION:
+        if data["count"] >= MIN_BETS_FOR_CALIBRATION and data["weight_total"] > 0:
             curve[mid] = {
                 "predicted": data["predicted"],
-                "actual": data["actual_sum"] / data["count"],
+                "actual": data["weighted_sum"] / data["weight_total"],
                 "count": data["count"],
             }
     return curve
@@ -181,7 +191,7 @@ def _build_calibration_curve(records):
 # ============================================================
 # SECTION: Isotonic Calibration (Fine-Grained, PAVA Smoothed)
 # ============================================================
-def _build_fine_calibration_curve(records):
+def _build_fine_calibration_curve(records, weights=None):
     """
     Build a fine-grained calibration curve using 5% probability buckets.
     Same structure as _build_calibration_curve but uses FINE_CALIBRATION_BUCKET_WIDTH
@@ -190,6 +200,7 @@ def _build_fine_calibration_curve(records):
     Args:
         records (list of dict): Historical prediction records with 'probability_over'
             and 'result' keys.
+        weights (list of float or None): Per-record weights (exponential decay).
     Returns:
         dict: {bucket_midpoint: {'predicted': float, 'actual': float, 'count': int}}
             Buckets with fewer than MIN_RECORDS_FINE_BUCKET records are excluded.
@@ -200,29 +211,32 @@ def _build_fine_calibration_curve(records):
     """
     if not records:
         return {}
+    if weights is None:
+        weights = [1.0] * len(records)
     # Build 5% buckets from [0.50, 1.00) → midpoints at 0.525, 0.575, ..., 0.975
     buckets = {}
     bucket_count = int(round((1.0 - 0.5) / FINE_CALIBRATION_BUCKET_WIDTH))
     for i in range(bucket_count):
         low = 0.5 + i * FINE_CALIBRATION_BUCKET_WIDTH
         mid = round(low + FINE_CALIBRATION_BUCKET_WIDTH / 2.0, 4)
-        buckets[mid] = {"predicted": mid, "actual_sum": 0, "count": 0}
-    # Distribute records into buckets
-    for record in records:
+        buckets[mid] = {"predicted": mid, "weighted_sum": 0.0, "weight_total": 0.0, "count": 0}
+    # Distribute records into buckets with weights
+    for record, w in zip(records, weights):
         prob = float(record.get("probability_over", 0.5) or 0.5)
         result = int(record.get("result", 0) or 0)
         prob = max(0.5, min(0.9999, prob))
         mid = _get_bucket_midpoint(prob, FINE_CALIBRATION_BUCKET_WIDTH)
         if mid in buckets:
-            buckets[mid]["actual_sum"] += result
+            buckets[mid]["weighted_sum"] += result * w
+            buckets[mid]["weight_total"] += w
             buckets[mid]["count"] += 1
     # Only keep buckets with enough data for a reliable estimate
     curve = {}
     for mid, data in buckets.items():
-        if data["count"] >= MIN_RECORDS_FINE_BUCKET:
+        if data["count"] >= MIN_RECORDS_FINE_BUCKET and data["weight_total"] > 0:
             curve[mid] = {
                 "predicted": data["predicted"],
-                "actual": data["actual_sum"] / data["count"],
+                "actual": data["weighted_sum"] / data["weight_total"],
                 "count": data["count"],
             }
     return curve
@@ -297,7 +311,7 @@ def _apply_monotonic_smoothing(curve):
                 "count": curve[k]["count"],
             }
     return smoothed_curve
-def isotonic_calibrate(raw_probability, historical_records):
+def isotonic_calibrate(raw_probability, historical_records, record_weights=None):
     """
     Return a calibrated probability using isotonic (5% bucket) calibration.
     Uses fine-grained 5% buckets with monotonic smoothing via PAVA.
@@ -306,6 +320,7 @@ def isotonic_calibrate(raw_probability, historical_records):
     Args:
         raw_probability (float): The model's raw predicted P(over), 0-1.
         historical_records (list of dict): Records with 'probability_over' and 'result'.
+        record_weights (list of float or None): Per-record exponential decay weights.
     Returns:
         float: Calibrated probability (0.0-1.0).
     Example:
@@ -315,7 +330,7 @@ def isotonic_calibrate(raw_probability, historical_records):
     try:
         prob = max(0.5, min(0.9999, float(raw_probability)))
         # Build fine curve and apply monotonic smoothing
-        fine_curve = _build_fine_calibration_curve(historical_records)
+        fine_curve = _build_fine_calibration_curve(historical_records, record_weights)
         if fine_curve:
             smoothed = _apply_monotonic_smoothing(fine_curve)
         else:
@@ -326,7 +341,7 @@ def isotonic_calibrate(raw_probability, historical_records):
         if bucket_data is not None:
             return round(bucket_data["actual"], 6)
         # Fine bucket not found — fall back to coarse calibration
-        coarse_curve = _build_calibration_curve(historical_records)
+        coarse_curve = _build_calibration_curve(historical_records, record_weights)
         coarse_mid = _get_bucket_midpoint(prob, CALIBRATION_BUCKET_WIDTH)
         coarse_data = coarse_curve.get(coarse_mid)
         if coarse_data is not None:
@@ -358,18 +373,18 @@ def get_isotonic_calibration_curve(days=90):
             print(f"{pt['predicted']:.0%} predicted → {pt['actual']:.0%} actual")
     """
     try:
-        records = _load_historical_predictions(days=days)
+        records, weights = _load_historical_predictions(days=days)
         total_records = len(records)
         if not records:
             return {"has_data": False, "curve": [], "is_isotonic": False, "total_records": 0}
-        fine_curve = _build_fine_calibration_curve(records)
+        fine_curve = _build_fine_calibration_curve(records, weights)
         is_isotonic = bool(fine_curve)
         if is_isotonic:
             smoothed = _apply_monotonic_smoothing(fine_curve)
             source_curve = smoothed
         else:
             # Not enough data for fine buckets — use coarse curve
-            source_curve = _build_calibration_curve(records)
+            source_curve = _build_calibration_curve(records, weights)
         if not source_curve:
             return {"has_data": False, "curve": [], "is_isotonic": False, "total_records": total_records}
         curve_list = []
@@ -427,21 +442,21 @@ def get_calibration_adjustment(raw_probability, days=90, stat_type=None):
             (stat_type or "").lower(), MAX_CALIBRATION_ADJUSTMENT
         )
         # Try stat-specific records first; fall back to all records
-        records = _load_historical_predictions(days=days, stat_type=stat_type)
+        records, weights = _load_historical_predictions(days=days, stat_type=stat_type)
         if not records:
-            records = _load_historical_predictions(days=days)
+            records, weights = _load_historical_predictions(days=days)
         if not records:
             return 0.0  # Cold start: no historical data
         # ── Isotonic path: use fine-grained PAVA calibration when enough data ──
         if len(records) >= MIN_TOTAL_FOR_ISOTONIC:
-            calibrated_prob = isotonic_calibrate(raw_probability, records)
+            calibrated_prob = isotonic_calibrate(raw_probability, records, weights)
             raw = max(0.5, min(0.9999, float(raw_probability)))
             # Convert probability difference to confidence-score points (same scale)
             adjustment = (raw - calibrated_prob) * 100.0
             adjustment = max(-_stat_cap, min(_stat_cap, adjustment))
             return _safe_float(round(adjustment, 2), 0.0)
         # ── Coarse fallback: original 10% bucket logic ──
-        curve = _build_calibration_curve(records)
+        curve = _build_calibration_curve(records, weights)
         if not curve:
             return 0.0  # Insufficient data in all buckets
         # Find the bucket for this probability
@@ -477,11 +492,11 @@ def get_calibration_summary(days=90):
         }
     """
     try:
-        records = _load_historical_predictions(days=days)
+        records, weights = _load_historical_predictions(days=days)
         if not records:
             return {"has_data": False, "total_bets": 0, "calibration_curve": {},
                     "overall_accuracy": None, "overconfidence_buckets": []}
-        curve = _build_calibration_curve(records)
+        curve = _build_calibration_curve(records, weights)
         total = len(records)
         hits = sum(int(r.get("result", 0) or 0) for r in records)
         overall_accuracy = hits / total if total > 0 else None

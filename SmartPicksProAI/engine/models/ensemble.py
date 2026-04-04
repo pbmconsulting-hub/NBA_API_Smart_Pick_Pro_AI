@@ -11,6 +11,12 @@ from engine.models.catboost_model import CatBoostModel
 
 _logger = get_logger(__name__)
 
+try:
+    from engine.models.lightgbm_model import LightGBMModel
+    _LGBM_AVAILABLE = True
+except Exception:
+    _LGBM_AVAILABLE = False
+
 
 class ModelEnsemble(BaseModel):
     """Inverse-variance weighted blend of all available ML models."""
@@ -19,23 +25,35 @@ class ModelEnsemble(BaseModel):
 
     def __init__(self):
         self.models = [RidgeModel(), XGBoostModel(), CatBoostModel()]
+        if _LGBM_AVAILABLE:
+            self.models.append(LightGBMModel())
         self._weights: dict = {}
         self._variances: dict = {}
 
-    def train(self, X, y) -> None:
+    def train(self, X, y, X_val=None, y_val=None) -> None:
         """Train all sub-models and compute inverse-variance weights.
 
+        Weights are computed on held-out validation data when provided,
+        preventing optimistic RMSE estimates from evaluating on training data.
+
         Args:
-            X: Feature matrix.
-            y: Target vector.
+            X: Training feature matrix.
+            y: Training target vector.
+            X_val: Optional validation feature matrix for weight computation.
+            y_val: Optional validation target vector for weight computation.
         """
         for model in self.models:
             try:
                 model.train(X, y)
-                metrics = model.evaluate(X, y)
+                # Evaluate on validation data if available, else fall back to train
+                eval_X = X_val if X_val is not None else X
+                eval_y = y_val if y_val is not None else y
+                metrics = model.evaluate(eval_X, eval_y)
                 variance = metrics["rmse"] ** 2 if metrics["rmse"] > 0 else 1e-6
                 self._variances[model.name] = variance
-                _logger.info("Trained %s → RMSE=%.4f", model.name, metrics["rmse"])
+                _logger.info("Trained %s → RMSE=%.4f (eval on %s)",
+                             model.name, metrics["rmse"],
+                             "val" if X_val is not None else "train")
             except Exception as exc:
                 _logger.error("Ensemble train failed for %s: %s", model.name, exc)
                 self._variances[model.name] = 1.0

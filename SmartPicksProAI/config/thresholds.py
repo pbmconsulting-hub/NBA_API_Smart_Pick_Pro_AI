@@ -11,9 +11,9 @@
 PLATINUM_THRESHOLD = 84   # Near-perfect conditions
 GOLD_THRESHOLD     = 65   # Very strong, clear edge
 SILVER_THRESHOLD   = 57   # Solid evidence above average
-BRONZE_THRESHOLD   = 35   # Minimum viable confidence (below = Do Not Bet)
+BRONZE_THRESHOLD   = 45   # Minimum viable confidence (below = Do Not Bet)
 
-DO_NOT_BET_THRESHOLD = 35  # Alias for BRONZE_THRESHOLD floor
+DO_NOT_BET_THRESHOLD = 45  # Alias for BRONZE_THRESHOLD floor
 
 # ── Minimum edge % required per tier ──────────────────────────────────────────
 PLATINUM_MIN_EDGE_PCT = 10.0
@@ -36,7 +36,7 @@ BRONZE_AUTO_LOG_MIN_EDGE       = 8.0    # Bronze requires ≥8% edge to auto-log
 BRONZE_AUTO_LOG_MIN_CONFIDENCE = 60.0   # Bronze requires ≥60 confidence score
 
 # ── Simulation defaults ───────────────────────────────────────────────────────
-DEFAULT_NUM_SIMULATIONS = 2000
+DEFAULT_NUM_SIMULATIONS = 5000
 CONVERGENCE_THRESHOLD   = 0.001
 CONVERGENCE_CHECK_INTERVAL = 200
 

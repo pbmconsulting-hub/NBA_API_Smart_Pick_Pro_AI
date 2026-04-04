@@ -1,7 +1,8 @@
-"""engine/models/train.py – Training script with time-series holdout validation.
+"""engine/models/train.py – Training script with walk-forward cross-validation.
 
 Improvements over the original:
-  • Enforces a date-sorted time-series split (no future leakage).
+  • Walk-forward (expanding window) cross-validation for robust estimates.
+  • Enforces date-sorted time-series split (no future leakage).
   • Logs feature importance from tree-based models.
   • Drops non-numeric / identifier columns before training.
 """
@@ -22,6 +23,10 @@ _DROP_COLS = {
     "matchup", "season", "home_team_id", "away_team_id", "opp_team_id",
     "l10",
 }
+
+# Walk-forward CV: minimum fold size and number of folds
+_MIN_FOLD_SIZE = 100
+_NUM_FOLDS = 5
 
 
 def _load_ml_ready_data(stat_type: str = "pts"):
@@ -103,8 +108,45 @@ def _log_feature_importance(model, feature_cols: list, model_name: str, stat_typ
         _logger.debug("Feature importance logging failed: %s", exc)
 
 
+def _walk_forward_splits(n_samples: int, num_folds: int, min_fold_size: int):
+    """Generate walk-forward (expanding window) train/val index pairs.
+
+    Args:
+        n_samples: Total number of (date-sorted) samples.
+        num_folds: Desired number of folds.
+        min_fold_size: Minimum validation fold size.
+
+    Yields:
+        (train_start, train_end, val_start, val_end) index tuples.
+    """
+    # Reserve the last portion for validation folds
+    fold_size = max(min_fold_size, n_samples // (num_folds + 2))
+    # Ensure we have enough data for at least one fold
+    first_train_end = n_samples - fold_size * num_folds
+    if first_train_end < min_fold_size:
+        # Fall back to a single 80/20 split
+        split = int(n_samples * 0.8)
+        yield 0, split, split, n_samples
+        return
+
+    for i in range(num_folds):
+        train_end = first_train_end + i * fold_size
+        val_start = train_end
+        val_end = val_start + fold_size
+        if val_end > n_samples:
+            val_end = n_samples
+        if val_start >= val_end:
+            break
+        yield 0, train_end, val_start, val_end
+
+
 def train_models(stat_type: str = "pts") -> dict:
-    """Train all available models with time-series holdout validation.
+    """Train all available models with walk-forward cross-validation.
+
+    Uses expanding-window CV: train on games 0..N, validate on N..N+fold,
+    then expand the training window. Final model is trained on all data
+    except the last fold, with the last fold used for reporting and
+    ensemble weight computation.
 
     Args:
         stat_type: The target stat column to train on.
@@ -120,13 +162,64 @@ def train_models(stat_type: str = "pts") -> dict:
                         0 if X is None else len(X))
         return {}
 
-    # Time-series holdout: last 20% of rows (data is date-sorted)
-    split = int(len(X) * 0.8)
-    X_train, X_val = X[:split], X[split:]
-    y_train, y_val = y[:split], y[split:]
+    import numpy as np
+
+    # Walk-forward cross-validation to get robust performance estimates
+    fold_metrics: dict = {}  # model_name → list of per-fold metric dicts
+    splits = list(_walk_forward_splits(len(X), _NUM_FOLDS, _MIN_FOLD_SIZE))
+
+    if len(splits) > 1:
+        _logger.info(
+            "Walk-forward CV for %s: %d folds, %d total samples, %d features",
+            stat_type, len(splits), len(X), len(feature_cols),
+        )
+        from engine.models.ensemble import ModelEnsemble
+        from engine.models.ridge_model import RidgeModel
+
+        for fold_idx, (tr_start, tr_end, val_start, val_end) in enumerate(splits):
+            X_tr, y_tr = X[tr_start:tr_end], y[tr_start:tr_end]
+            X_vl, y_vl = X[val_start:val_end], y[val_start:val_end]
+            for ModelClass in [RidgeModel, ModelEnsemble]:
+                model = ModelClass()
+                try:
+                    if isinstance(model, ModelEnsemble):
+                        model.train(X_tr, y_tr, X_val=X_vl, y_val=y_vl)
+                    else:
+                        model.train(X_tr, y_tr)
+                    metrics = model.evaluate(X_vl, y_vl)
+                    fold_metrics.setdefault(model.name, []).append(metrics)
+                except Exception as exc:
+                    _logger.debug("Fold %d %s failed: %s", fold_idx, model.name, exc)
+
+        # Log averaged walk-forward metrics
+        for name, mlist in fold_metrics.items():
+            avg_mae = np.mean([m["mae"] for m in mlist])
+            avg_rmse = np.mean([m["rmse"] for m in mlist])
+            avg_r2 = np.mean([m["r2"] for m in mlist])
+            _logger.info(
+                "Walk-forward avg (%s/%s): MAE=%.3f RMSE=%.3f R²=%.3f (%d folds)",
+                name, stat_type, avg_mae, avg_rmse, avg_r2, len(mlist),
+            )
+
+    # Final training: use all data except last fold for training,
+    # last fold for final evaluation and ensemble weight computation
+    if splits:
+        last_split = splits[-1]
+        final_train_end = last_split[1]
+    else:
+        final_train_end = int(len(X) * 0.8)
+
+    X_train, X_val = X[:final_train_end], X[final_train_end:]
+    y_train, y_val = y[:final_train_end], y[final_train_end:]
+
+    if len(X_val) == 0:
+        # Fallback: 80/20 split
+        split = int(len(X) * 0.8)
+        X_train, X_val = X[:split], X[split:]
+        y_train, y_val = y[:split], y[split:]
 
     _logger.info(
-        "Training %s models — %d train / %d val samples, %d features",
+        "Final training %s models — %d train / %d val samples, %d features",
         stat_type, len(X_train), len(X_val), len(feature_cols),
     )
 
@@ -138,7 +231,10 @@ def train_models(stat_type: str = "pts") -> dict:
 
     for model in models_to_train:
         try:
-            model.train(X_train, y_train)
+            if isinstance(model, ModelEnsemble):
+                model.train(X_train, y_train, X_val=X_val, y_val=y_val)
+            else:
+                model.train(X_train, y_train)
             metrics = model.evaluate(X_val, y_val)
             model_name = model.name if hasattr(model, "name") else str(model)
             results[model_name] = metrics
