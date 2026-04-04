@@ -61,8 +61,9 @@ def render() -> None:
     sum_cols[3].metric("Pushes", f"➖ {pushes}")
     sum_cols[4].metric("Pending", f"⏳ {pending}")
     sum_cols[5].metric("Win Rate", f"{win_rate:.1f}%" if decided > 0 else "N/A")
+    _roi_label = "Est. ROI (Kelly)" if roi_mode == "Kelly-Weighted" else "Est. ROI (-110)"
     sum_cols[6].metric(
-        "Est. ROI (-110)",
+        _roi_label,
         f"{roi:+.1f}%" if decided > 0 else "N/A",
         delta="Profit" if roi > 0 else ("Loss" if roi < 0 else "Break Even"),
         delta_color="normal" if roi > 0 else ("inverse" if roi < 0 else "off"),
