@@ -1,0 +1,127 @@
+# ============================================================
+# SmartPicksProAI — Central Configuration
+# ============================================================
+# All tunable parameters in one place.  Individual Python modules
+# may still define their own defaults, but this file is the
+# canonical source of truth for operators and contributors.
+# ============================================================
+
+# ── Database ──────────────────────────────────────────────────
+database:
+  path: "smartpicks.db"          # Relative to SmartPicksProAI/backend/
+  journal_mode: "WAL"            # SQLite journal mode (WAL for concurrent R/W)
+
+# ── Server ────────────────────────────────────────────────────
+server:
+  host: "127.0.0.1"
+  backend_port: 8098
+  frontend_port: 8501
+
+# ── NBA API ───────────────────────────────────────────────────
+nba_api:
+  default_season: "2025-26"
+  rate_limit_pause_seconds: 0.6  # Delay between NBA API requests
+
+# ── External API endpoints ────────────────────────────────────
+external_apis:
+  odds_api_base: "https://api.the-odds-api.com/v4"
+  prizepicks_base: "https://api.prizepicks.com/projections"
+  underdog_base: "https://api.underdogfantasy.com/v1"
+  # API keys are stored in environment variables — see .env.example
+
+# ── Confidence tiers (0–100 SAFE Score) ──────────────────────
+confidence_tiers:
+  platinum: 84
+  gold: 65
+  silver: 57
+  bronze: 35           # Below this = Do Not Bet
+
+# ── Minimum edge % per tier ──────────────────────────────────
+min_edge_pct:
+  platinum: 10.0
+  gold: 7.0
+  silver: 3.0
+  bronze: 1.0
+
+# ── Minimum win probability per tier ─────────────────────────
+min_probability:
+  platinum: 0.62
+  gold: 0.57
+
+# ── Simulation ────────────────────────────────────────────────
+simulation:
+  default_iterations: 2000
+  convergence_threshold: 0.001
+  convergence_check_interval: 200
+
+# ── Sensitivity analysis deltas ──────────────────────────────
+sensitivity:
+  blowout_delta: 0.10
+  pace_delta: 0.05
+  matchup_delta: 0.05
+
+# ── Risk-flag thresholds ─────────────────────────────────────
+risk_flags:
+  conflict_ratio: 0.80
+  high_var_max_edge: 8.0
+  blowout_spread: 10.0
+  hot_streak_ratio: 1.25
+
+# ── Model training ────────────────────────────────────────────
+training:
+  stat_types:
+    - pts
+    - reb
+    - ast
+    - stl
+    - blk
+    - tov
+    - fg3m
+    - ftm
+  train_split: 0.80               # 80 / 20 time-series holdout
+  saved_model_dir: "engine/models/saved"
+
+# ── Model hyperparameters ─────────────────────────────────────
+model_hyperparameters:
+  ridge:
+    alpha: 1.0
+  xgboost:
+    n_estimators: 300
+    max_depth: 6
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 0.8
+  catboost:
+    iterations: 500
+    depth: 6
+    learning_rate: 0.05
+    l2_leaf_reg: 3.0
+    verbose: 0
+
+# ── Slate generator defaults ─────────────────────────────────
+slate:
+  default_game_total: 220.0
+  default_vegas_spread: 0.0
+  min_games_for_analysis: 5
+  injury_minutes_boost_per_out: 0.03
+  standard_juice_odds: 110.0
+  default_platform: "prizepicks"
+
+# ── Edge detection ────────────────────────────────────────────
+edge_detection:
+  high_variance_cv_threshold: 0.45
+
+# ── Bankroll / Kelly ──────────────────────────────────────────
+bankroll:
+  kelly_fraction: 0.25             # Quarter-Kelly (conservative)
+
+# ── Data directories ──────────────────────────────────────────
+data_dirs:
+  raw: "data/raw"
+  processed: "data/processed"
+  ml_ready: "data/ml_ready"
+
+# ── League averages (updated periodically) ────────────────────
+league_averages:
+  pace: 100.0
+  drtg: 110.0

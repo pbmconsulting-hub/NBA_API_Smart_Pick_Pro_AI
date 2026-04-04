@@ -12,9 +12,12 @@ env/
 SmartPicksProAI/logs/
 SmartPicksProAI/data/raw/*.parquet
 SmartPicksProAI/data/raw/*.csv
+!SmartPicksProAI/data/raw/sample_*.csv
 SmartPicksProAI/data/processed/*.parquet
 SmartPicksProAI/data/processed/*.csv
+!SmartPicksProAI/data/processed/sample_*.csv
 SmartPicksProAI/data/processed/predictions_*.json
 SmartPicksProAI/data/ml_ready/*.parquet
 SmartPicksProAI/data/ml_ready/*.csv
+!SmartPicksProAI/data/ml_ready/sample_*.csv
 SmartPicksProAI/engine/models/saved/*.joblib

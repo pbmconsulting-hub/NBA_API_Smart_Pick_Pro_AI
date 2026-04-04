@@ -1,432 +1,410 @@
 # NBA_API-ETL — SmartPicksProAI
 
-A decoupled local application featuring a **Python/FastAPI backend** that
-harvests NBA player performance data and a **Streamlit frontend** that
-displays matchups, player stats, and admin controls in a dark "FinTech
-terminal" interface.
+A full-stack NBA player-prop prediction platform featuring a **Python/FastAPI
+backend**, a **Streamlit frontend**, and a modular **ML engine** that projects
+player stats, simulates distributions, detects betting edges, and manages
+bankroll — all powered by NBA API data.
 
-The data feeds an ML model that predicts player props (over/unders on points,
-rebounds, assists, etc.) and generates daily betting picks.
+---
+
+## Quick Start
+
+```bash
+# 1. Clone & enter the repo
+git clone https://github.com/pbmconsulting-hub/NBA_API_Smart_Pick_Pro_AI.git
+cd NBA_API_Smart_Pick_Pro_AI
+
+# 2. Install dependencies + create the database
+make setup
+
+# 3. Seed historical data from the NBA API (~5 min)
+make seed
+
+# 4. Run the ML pipeline and train models
+make pipeline
+make train
+
+# 5. Launch backend + frontend
+make run
+```
+
+Or use the one-command launcher:
+
+```bash
+./start.sh          # setup + backend + frontend
+./start.sh --full   # setup + seed + pipeline + train + run
+```
+
+The backend serves at **http://127.0.0.1:8098** and the frontend at
+**http://localhost:8501**.
 
 ---
 
 ## Project Structure
 
 ```
-SmartPicksProAI/
-├── backend/
-│   ├── setup_db.py        # Create the SQLite schema
-│   ├── initial_pull.py    # One-time historical data seed
-│   ├── data_updater.py    # On-demand incremental update module
-│   └── api.py             # FastAPI backend (port 8000)
+NBA_API_Smart_Pick_Pro_AI/
+├── config.yaml                 # Central YAML config (thresholds, hyperparams, endpoints)
+├── .env.example                # Environment variable template
+├── Makefile                    # Convenience build/run targets
+├── start.sh                    # One-command full-app launcher
+├── requirements.txt            # Python dependencies
+├── README.md                   # ← you are here
 │
-├── frontend/
-│   ├── api_service.py     # HTTP client with Streamlit caching
-│   └── app.py             # Streamlit dashboard
-│
-├── requirements.txt       # Python dependencies
-└── README.md
+└── SmartPicksProAI/
+    ├── backend/                # FastAPI REST API + data layer
+    │   ├── api.py              # FastAPI app — 49 endpoints (players, games, picks, admin)
+    │   ├── setup_db.py         # SQLite schema creation & migrations
+    │   ├── initial_pull.py     # One-time historical data seed from NBA API
+    │   ├── data_updater.py     # Incremental daily data refresh
+    │   ├── odds_client.py      # The Odds API integration (sportsbook prop lines)
+    │   ├── prizepicks_client.py# PrizePicks DFS lines client
+    │   ├── underdog_client.py  # Underdog Fantasy DFS lines client
+    │   ├── injury_client.py    # NBA CDN injury feed integration
+    │   └── utils.py            # Backend-specific helpers (upsert, matchup parsing)
+    │
+    ├── engine/                 # ML & analytics engine
+    │   ├── pipeline/           # 6-step numbered pipeline (see below)
+    │   │   ├── run_pipeline.py
+    │   │   ├── step_1_ingest.py
+    │   │   ├── step_2_clean.py
+    │   │   ├── step_3_features.py
+    │   │   ├── step_4_predict.py
+    │   │   ├── step_5_evaluate.py
+    │   │   └── step_6_export.py
+    │   │
+    │   ├── models/             # ML model wrappers & training
+    │   │   ├── base_model.py   # Abstract base class
+    │   │   ├── ridge_model.py  # Ridge regression
+    │   │   ├── xgboost_model.py# XGBoost gradient boosting
+    │   │   ├── catboost_model.py# CatBoost gradient boosting
+    │   │   ├── ensemble.py     # Weighted ensemble (XGBoost + CatBoost + Ridge)
+    │   │   ├── train.py        # Training script with time-series holdout
+    │   │   └── saved/          # Trained model artifacts (*.joblib, not committed)
+    │   │
+    │   ├── features/           # Feature engineering
+    │   │   ├── feature_engineering.py  # build_feature_matrix() — ~180 columns
+    │   │   ├── player_metrics.py       # True shooting %, usage rate
+    │   │   └── team_metrics.py         # Possessions, offensive/defensive rating
+    │   │
+    │   ├── predict/            # Prediction interface
+    │   │   └── predictor.py    # predict_player_stat() — loads saved models
+    │   │
+    │   ├── simulation.py       # Monte Carlo simulation (10k iterations, NumPy vectorised)
+    │   ├── projections.py      # Contextual player projections
+    │   ├── edge_detection.py   # 9-force directional edge analysis
+    │   ├── confidence.py       # SAFE Score confidence tiers (Platinum → Do Not Bet)
+    │   ├── explainer.py        # Human-readable pick explanations
+    │   ├── backtester.py       # Historical backtesting engine
+    │   ├── bankroll.py         # Kelly Criterion bet sizing
+    │   ├── odds_engine.py      # Odds math (implied prob, true edge, parlay EV)
+    │   ├── calibration.py      # Model calibration utilities
+    │   ├── correlation.py      # Stat correlation analysis
+    │   ├── data_adapter.py     # DB ↔ engine column mapping
+    │   ├── game_script.py      # Game script / blowout risk analysis
+    │   ├── impact_metrics.py   # Player impact metrics
+    │   ├── lineup_analysis.py  # Lineup / rotation analysis
+    │   ├── market_movement.py  # Line movement detection
+    │   ├── matchup_history.py  # Head-to-head matchup history
+    │   ├── math_helpers.py     # Sampling & distribution helpers
+    │   ├── regime_detection.py # Performance regime detection
+    │   ├── rotation_tracker.py # Rotation / minutes tracking
+    │   ├── stat_distributions.py# Stat distribution fitting
+    │   └── trade_evaluator.py  # Trade impact evaluation
+    │
+    ├── frontend/               # Streamlit dashboard
+    │   ├── app.py              # Main app — 12 pages (see below)
+    │   └── api_service.py      # HTTP client with Streamlit caching
+    │
+    ├── config/                 # Configuration
+    │   └── thresholds.py       # Named constants for tiers, edges, simulation
+    │
+    ├── tracking/               # Bet tracking & model performance
+    │   ├── bet_tracker.py      # Log bets, record results, performance stats
+    │   ├── database.py         # SQLite storage for tracking data
+    │   └── model_performance.py# Log predictions, get best model, weight tracking
+    │
+    ├── utils/                  # Shared utilities
+    │   ├── constants.py        # NBA teams, stat columns, league averages
+    │   ├── logger.py           # Centralized logging (get_logger)
+    │   ├── geo.py              # Geolocation helpers
+    │   ├── parquet_helpers.py  # Parquet I/O utilities
+    │   ├── rate_limiter.py     # API rate limiting
+    │   └── retry.py            # Retry decorator
+    │
+    ├── styles/                 # Frontend theming
+    │   └── theme.py            # CSS, banners, tier badges, verdict UI
+    │
+    ├── data/                   # Pipeline data (gitignored except samples)
+    │   ├── raw/                # Step 1 output — raw ingested data
+    │   ├── processed/          # Step 2 output — cleaned data
+    │   └── ml_ready/           # Step 3 output — feature matrices for training
+    │
+    ├── db/                     # Database directory
+    └── assets/                 # Static assets (images, logos)
 ```
 
 ---
 
-## Setup
+## Engine Pipeline
 
-### 1. Install dependencies
+The ML pipeline runs in 6 sequential steps. Each step reads the previous
+step's output and writes its own.
 
-```bash
-pip install -r requirements.txt
-```
+| Step | Module | What it does |
+|---|---|---|
+| **1. Ingest** | `step_1_ingest.py` | Pulls 9 tables from SQLite: Player_Game_Logs (with player/team joins), Games, Team_Game_Stats, Defense_Vs_Position, Box_Score_Advanced, Box_Score_Usage, Standings, Teams |
+| **2. Clean** | `step_2_clean.py` | Handles nulls, removes DNPs, casts types, deduplicates |
+| **3. Features** | `step_3_features.py` | Produces ~180-column feature matrix: rolling averages/std (3/5/10/20-game), form ratios, rest days, pace/defense adjustments, DvP multipliers |
+| **4. Predict** | `step_4_predict.py` | Passes real game context through trained models, predicts 8 stat types |
+| **5. Evaluate** | `step_5_evaluate.py` | Backtests predictions against actuals, computes accuracy metrics |
+| **6. Export** | `step_6_export.py` | Writes final outputs (predictions, confidence scores, pick recommendations) |
 
-### 2. Create the database schema
-
-```bash
-cd SmartPicksProAI/backend
-python setup_db.py
-```
-
-Creates `smartpicks.db` with eight tables: **Players**, **Teams**, **Games**,
-**Player_Game_Logs**, **Team_Game_Stats**, **Defense_Vs_Position**,
-**Team_Roster**, and **Injury_Status**.  Safe to run multiple times — uses
-`IF NOT EXISTS`.
-
-### 3. Seed historical data (run once)
+Run the full pipeline:
 
 ```bash
-cd SmartPicksProAI/backend
-python initial_pull.py
-```
-
-Fetches every player game log for the **2025-26 NBA regular season**, seeds
-the **Teams** table from `nba_api` static data, and populates **Players**,
-**Games**, **Player_Game_Logs**, **Team_Game_Stats**, and **Team_Roster**
-(including player positions).  This may take a few minutes due to API rate
-limits (one request per team for roster data).
-
----
-
-## Running the Application
-
-### Start the FastAPI backend
-
-```bash
-cd SmartPicksProAI/backend
-python api.py
-# or
-uvicorn api:app --reload --port 8000
-```
-
-The server listens on `http://localhost:8000`.
-
-### Start the Streamlit frontend
-
-In a **separate terminal**:
-
-```bash
-cd SmartPicksProAI/frontend
-streamlit run app.py
-```
-
-The dashboard opens at `http://localhost:8501`.
-
----
-
-## API Endpoints
-
-### `GET /api/players/{player_id}/last5`
-
-Returns a player's last 5 game logs with computed 5-game stat averages.
-Optimised for ML moving-average calculations.
-
-**Example:**
-```
-GET /api/players/2544/last5
-```
-
-**Response:**
-```json
-{
-  "player_id": 2544,
-  "first_name": "LeBron",
-  "last_name": "James",
-  "games": [
-    {
-      "game_date": "2026-03-20",
-      "game_id": "0022501050",
-      "pts": 28, "reb": 8, "ast": 9,
-      "blk": 1, "stl": 2, "tov": 3, "min": "35:42"
-    }
-  ],
-  "averages": {
-    "pts": 27.4, "reb": 7.2, "ast": 8.6,
-    "blk": 0.8, "stl": 1.4, "tov": 2.8
-  }
-}
-```
-
-### `GET /api/players/search?q=name`
-
-Search for players by name (case-insensitive, returns up to 25 results).
-
-**Example:**
-```
-GET /api/players/search?q=LeBron
-```
-
-**Response:**
-```json
-{
-  "results": [
-    {
-      "player_id": 2544,
-      "first_name": "LeBron",
-      "last_name": "James",
-      "full_name": "LeBron James",
-      "team_id": 1610612747,
-      "team_abbreviation": "LAL",
-      "position": "F"
-    }
-  ]
-}
-```
-
-### `GET /api/games/today`
-
-Returns today's NBA matchups.  Checks the local database first; if no games
-are found, fetches live data via `ScoreboardV3`.
-
-**Response:**
-```json
-{
-  "date": "2026-03-30",
-  "source": "database",
-  "games": [
-    {"game_id": "0022501100", "matchup": "LAL vs. BOS"}
-  ]
-}
-```
-
-### `GET /api/teams`
-
-Lists all 30 NBA teams stored in the database, including season-level
-pace, offensive rating, and defensive rating computed from Team_Game_Stats.
-
-**Response:**
-```json
-{
-  "teams": [
-    {
-      "team_id": 1610612737,
-      "abbreviation": "ATL",
-      "team_name": "Atlanta Hawks",
-      "conference": "East",
-      "division": "Southeast",
-      "pace": 99.8,
-      "ortg": 112.3,
-      "drtg": 114.1
-    }
-  ]
-}
-```
-
-### `GET /api/teams/{team_id}/roster`
-
-Returns the roster for a specific team.
-
-**Response:**
-```json
-{
-  "team_id": 1610612747,
-  "players": [
-    {
-      "player_id": 2544,
-      "first_name": "LeBron",
-      "last_name": "James",
-      "full_name": "LeBron James",
-      "position": "F",
-      "team_abbreviation": "LAL"
-    }
-  ]
-}
-```
-
-### `GET /api/teams/{team_id}/stats?last_n=10`
-
-Returns recent game-level stats for a specific team (default last 10 games,
-max 82).
-
-**Response:**
-```json
-{
-  "team_id": 1610612747,
-  "games": [
-    {
-      "game_id": "0022501100",
-      "game_date": "2026-03-28",
-      "matchup": "LAL vs. BOS",
-      "opponent_team_id": 1610612738,
-      "is_home": 1,
-      "points_scored": 112,
-      "points_allowed": 105,
-      "pace_est": 99.2,
-      "ortg_est": 113.5,
-      "drtg_est": 106.4
-    }
-  ]
-}
-```
-
-### `POST /api/admin/refresh-data`
-
-Triggers an on-demand incremental data update.  Fetches all player and team
-game logs between the last stored date and yesterday, then appends new rows.
-Also refreshes season-level team pace/ortg/drtg and defense-vs-position
-multipliers.
-
-**Response:**
-```json
-{
-  "status": "success",
-  "new_records": 342,
-  "message": "Added 342 new game log records."
-}
-```
-
-### `GET /api/defense-vs-position/{team_abbreviation}`
-
-Returns defense-vs-position multipliers for a specific team.  Each multiplier
-indicates how players at a given position perform against this team relative to
-the league average.  `> 1.0` means weaker defense; `< 1.0` means tougher.
-
-**Example:**
-```
-GET /api/defense-vs-position/BOS
-```
-
-**Response:**
-```json
-{
-  "team_abbreviation": "BOS",
-  "positions": [
-    {
-      "pos": "G",
-      "vs_pts_mult": 0.95,
-      "vs_reb_mult": 1.02,
-      "vs_ast_mult": 0.98,
-      "vs_stl_mult": 1.01,
-      "vs_blk_mult": 0.90,
-      "vs_3pm_mult": 0.93
-    }
-  ]
-}
+cd SmartPicksProAI
+python -m engine.pipeline.run_pipeline
 ```
 
 ---
 
-## Frontend Features
+## ML Models
 
-| Feature | Description |
+| Model | Module | Description |
+|---|---|---|
+| **Ridge** | `ridge_model.py` | Linear baseline (fast, interpretable) |
+| **XGBoost** | `xgboost_model.py` | Gradient-boosted trees (high accuracy) |
+| **CatBoost** | `catboost_model.py` | Gradient boosting with native categorical support |
+| **ModelEnsemble** | `ensemble.py` | Weighted blend of all three models |
+
+### Training
+
+```bash
+cd SmartPicksProAI
+python -m engine.models.train
+```
+
+Trains **Ridge + ModelEnsemble** for 8 stat types (`pts`, `reb`, `ast`, `stl`,
+`blk`, `tov`, `fg3m`, `ftm`) with a date-sorted 80/20 time-series split.
+Trained artifacts are saved as `.joblib` files in `engine/models/saved/`.
+
+### Simulation Engine
+
+The simulation engine (`engine/simulation.py`) runs **10,000 Monte Carlo
+iterations** per player per stat using NumPy vectorized operations. Three
+distribution paths:
+
+- **Skew-normal** (default for most stats)
+- **Zero-inflated** (threes / fg3m)
+- **Poisson** (steals, blocks, turnovers)
+- **KDE** path when 15+ game logs are available
+
+### Edge Detection
+
+The edge detector (`engine/edge_detection.py`) evaluates **9 directional
+forces** that push a player's performance above or below the posted line:
+matchup quality, pace environment, rest advantage, injury impact, form
+trend, home/away, game script, line movement, and rotation changes.
+
+### Confidence Scoring
+
+The SAFE Score (`engine/confidence.py`) maps to four tiers:
+
+| Tier | Score | Min Edge |
+|---|---|---|
+| **Platinum** | ≥ 84 | 10%+ |
+| **Gold** | ≥ 65 | 7%+ |
+| **Silver** | ≥ 57 | 3%+ |
+| **Bronze** | ≥ 35 | 1%+ |
+| **Do Not Bet** | < 35 | — |
+
+---
+
+## Backtester & Bankroll Manager
+
+- **Backtester** (`engine/backtester.py`) — Replays the full projection →
+  simulation → edge pipeline against historical game logs to measure accuracy
+  and profitability.
+
+- **Bankroll Manager** (`engine/bankroll.py`) — Implements the Kelly Criterion
+  for optimal bet sizing. Default is quarter-Kelly (conservative).
+
+---
+
+## Bet Tracker
+
+The tracking system (`tracking/`) persists pick history, bet results, and
+model performance in a local SQLite database.
+
+- `bet_tracker.py` — High-level interface: log bets, record results, view
+  performance by tier/stat/platform.
+- `model_performance.py` — Logs predictions vs actuals, tracks best model per
+  stat type.
+
+---
+
+## Odds & DFS Clients
+
+| Client | Module | Data Source |
+|---|---|---|
+| **The Odds API** | `backend/odds_client.py` | Sportsbook prop lines (DraftKings, FanDuel, etc.). Requires `ODDS_API_KEY` env var. |
+| **PrizePicks** | `backend/prizepicks_client.py` | DFS prop lines. Caches in `DFS_Prop_Lines` table. |
+| **Underdog Fantasy** | `backend/underdog_client.py` | DFS prop lines. Caches in `DFS_Prop_Lines` table. |
+| **Injury Feed** | `backend/injury_client.py` | NBA CDN live injury data → `Injury_Status` table. |
+
+Cross-platform edge detection (`engine/edge_detection.py`) merges sportsbook
++ DFS lines and evaluates each platform independently.
+
+---
+
+## API Endpoints (Selected)
+
+The backend exposes **49 REST endpoints**. Key groups:
+
+### Player Data
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/players/{id}/last5` | Last 5 game logs with averages |
+| GET | `/api/players/search?q=name` | Search players by name |
+| GET | `/api/players/{id}/bio` | Player biography |
+| GET | `/api/players/{id}/advanced` | Advanced stats |
+| GET | `/api/players/{id}/projection` | Full projection with simulation |
+| GET | `/api/players/{id}/matchups` | Head-to-head matchup stats |
+
+### Games & Teams
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/games/today` | Today's NBA matchups |
+| GET | `/api/games/{id}/box-score` | Game box score |
+| GET | `/api/teams` | All 30 teams with pace/ortg/drtg |
+| GET | `/api/teams/{id}/roster` | Team roster |
+| GET | `/api/defense-vs-position/{abbrev}` | DvP multipliers |
+| GET | `/api/standings` | Current standings |
+
+### Picks & Analysis
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/picks/analyze` | Full prop analysis (projection + sim + edge + confidence) |
+| GET | `/api/picks/today` | Auto-generated daily picks |
+| GET | `/api/slate/today` | Autonomous slate builder (scans all games × rosters × stats) |
+| POST | `/api/picks/save` | Save a pick to tracking |
+| GET | `/api/picks/history` | Pick history |
+
+### Admin
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/admin/refresh-data` | Incremental data update |
+| POST | `/api/admin/refresh-odds` | Refresh sportsbook odds |
+| POST | `/api/admin/refresh-prizepicks` | Refresh PrizePicks lines |
+| POST | `/api/admin/refresh-underdog` | Refresh Underdog lines |
+| POST | `/api/admin/refresh-injuries` | Refresh injury data |
+| POST | `/api/admin/train-models` | Trigger model training |
+
+### Health
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/health` | Health check → `{"status": "ok"}` |
+
+---
+
+## Frontend Pages
+
+The Streamlit dashboard includes 12 pages:
+
+| Page | Description |
 |---|---|
-| **Today's Matchup Grid** | Displays NBA games scheduled for today in a card layout. |
-| **Player Search** | Search for players by name (e.g. "LeBron") — no need to know player IDs. |
-| **Player Performance Card** | View last 5 game logs, full stat averages (all 19 stat columns), and a data table. |
-| **Team Browser** | Sidebar dropdown to select any NBA team and view its current roster. |
-| **Admin Sync Button** | Sidebar button triggers `POST /api/admin/refresh-data`, with a spinner and success/error toast. |
-| **Response Caching** | GET requests are cached for 1 hour via `@st.cache_data(ttl=3600)` to prevent redundant API calls. |
+| **Home** | Today's matchup grid, hero banner |
+| **Game Detail** | Box scores, play-by-play, rotation, win probability |
+| **Player Profile** | Last 5 logs, career stats, advanced metrics |
+| **Standings** | Current NBA standings |
+| **Teams Browse** | All 30 teams with search |
+| **Team Detail** | Roster, game stats, estimated metrics |
+| **League Leaders** | Statistical leaders |
+| **Defense** | Defense-vs-position multipliers |
+| **Prop Analyzer** | Full prop analysis with tabbed player cards (info, predictions, bet sizing) |
+| **Pick History** | Saved picks with results |
+| **Bet Tracker** | Log bets, record outcomes, performance dashboards |
+| **More** | Additional tools and settings |
 
 ---
 
-## File Descriptions
+## Configuration
 
-| File | Purpose |
+### `config.yaml`
+
+Central YAML config for all tunable parameters — model hyperparameters,
+confidence thresholds, API endpoints, database path, simulation defaults, and
+more. See [`config.yaml`](config.yaml) for the full reference.
+
+### `config/thresholds.py`
+
+Python constants for confidence tiers, edge percentages, and simulation
+defaults. Imported directly by engine modules:
+
+```python
+from config.thresholds import PLATINUM_THRESHOLD, GOLD_THRESHOLD
+```
+
+### `.env.example`
+
+Template for environment variables. Copy to `.env` and fill in your API keys:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Required | Description |
+|---|---|---|
+| `ODDS_API_KEY` | For live odds | The Odds API key |
+| `PRIZEPICKS_API_URL` | Optional | Override PrizePicks base URL |
+| `UNDERDOG_API_URL` | Optional | Override Underdog base URL |
+
+---
+
+## Database
+
+SQLite with WAL journal mode for concurrent reads/writes. Schema managed by
+`backend/setup_db.py` (idempotent — safe to run multiple times).
+
+### Core Tables
+
+| Table | Description |
 |---|---|
-| `backend/setup_db.py` | Creates `smartpicks.db` and all eight tables with `IF NOT EXISTS` guards and `ALTER TABLE` migration support. |
-| `backend/initial_pull.py` | One-time seed script — seeds Teams (with conference/division) from `nba_api` static data, pulls the full 2025-26 season via `LeagueGameLog` (player + team level), computes pace/ortg/drtg estimates, fetches rosters via `CommonTeamRoster`, computes Defense_Vs_Position multipliers, and loads all core tables. |
-| `backend/data_updater.py` | Exposes `run_update()` — finds the latest date in the DB, fetches only new player and team game logs, handles DNP/null stats, updates Team_Game_Stats, refreshes season-level team ratings and defense-vs-position multipliers. No scheduling loops. |
-| `backend/api.py` | FastAPI app with eight endpoints: last-5 stats, player search, today's games, team list (with pace/ortg/drtg), team roster, team game stats, defense-vs-position multipliers, and manual refresh trigger. |
-| `frontend/api_service.py` | HTTP client using `requests` with `@st.cache_data` caching and error handling for all eight endpoints. |
-| `frontend/app.py` | Streamlit dashboard with dark FinTech theme, matchup grid, player name search, team browser, and admin controls. |
+| `Players` | Player metadata (name, team, position) |
+| `Teams` | Team info + pace/ortg/drtg |
+| `Games` | Game schedule and scores |
+| `Player_Game_Logs` | Per-player per-game stat lines (22 columns) |
+| `Team_Game_Stats` | Per-team per-game stats |
+| `Defense_Vs_Position` | DvP multipliers by team × position |
+| `Team_Roster` | Roster assignments with effective dates |
+| `Injury_Status` | Injury reports from NBA CDN |
+| `Prop_Lines` | Cached sportsbook prop lines (The Odds API) |
+| `DFS_Prop_Lines` | Cached DFS prop lines (PrizePicks, Underdog) |
 
 ---
 
-## Database Schema
+## Development
 
-**Players**
+### Prerequisites
 
-| Column | Type | Notes |
-|---|---|---|
-| `player_id` | INTEGER | Primary key |
-| `first_name` | TEXT | Not null |
-| `last_name` | TEXT | Not null |
-| `full_name` | TEXT | |
-| `team_id` | INTEGER | |
-| `team_abbreviation` | TEXT | |
-| `position` | TEXT | |
-| `is_active` | INTEGER | Default 1 |
+- Python 3.10+
+- `pip install -r requirements.txt`
 
-**Teams**
+### Useful commands
 
-| Column | Type | Notes |
-|---|---|---|
-| `team_id` | INTEGER | Primary key |
-| `abbreviation` | TEXT | Not null |
-| `team_name` | TEXT | Not null |
-| `conference` | TEXT | |
-| `division` | TEXT | |
-| `pace` | REAL | |
-| `ortg` | REAL | |
-| `drtg` | REAL | |
+```bash
+make help           # Show all available targets
+make setup          # Install deps + create DB
+make seed           # Seed historical data
+make pipeline       # Run ML pipeline
+make train          # Train models
+make run            # Backend + frontend
+make clean          # Remove generated files
+```
 
-**Games**
+---
 
-| Column | Type | Notes |
-|---|---|---|
-| `game_id` | TEXT | Primary key |
-| `game_date` | TEXT | YYYY-MM-DD |
-| `season` | TEXT | e.g. `"2025-26"` |
-| `home_team_id` | INTEGER | FK → Teams |
-| `away_team_id` | INTEGER | FK → Teams |
-| `home_abbrev` | TEXT | e.g. `"LAL"` |
-| `away_abbrev` | TEXT | e.g. `"BOS"` |
-| `matchup` | TEXT | e.g. `"LAL vs. BOS"` |
-| `home_score` | INTEGER | Home team points |
-| `away_score` | INTEGER | Away team points |
+## License
 
-**Player_Game_Logs**
-
-| Column | Type | Notes |
-|---|---|---|
-| `player_id` | INTEGER | Composite PK, FK → Players |
-| `game_id` | TEXT | Composite PK, FK → Games |
-| `wl` | TEXT | Win/Loss (`W` or `L`) |
-| `min` | TEXT | Minutes played (`0:00` for DNP) |
-| `pts` | INTEGER | Points (0 for DNP) |
-| `reb` | INTEGER | Rebounds |
-| `ast` | INTEGER | Assists |
-| `stl` | INTEGER | Steals |
-| `blk` | INTEGER | Blocks |
-| `tov` | INTEGER | Turnovers |
-| `fgm` | INTEGER | Field goals made |
-| `fga` | INTEGER | Field goals attempted |
-| `fg_pct` | REAL | Field goal percentage |
-| `fg3m` | INTEGER | Three-pointers made |
-| `fg3a` | INTEGER | Three-pointers attempted |
-| `fg3_pct` | REAL | Three-point percentage |
-| `ftm` | INTEGER | Free throws made |
-| `fta` | INTEGER | Free throws attempted |
-| `ft_pct` | REAL | Free throw percentage |
-| `oreb` | INTEGER | Offensive rebounds |
-| `dreb` | INTEGER | Defensive rebounds |
-| `pf` | INTEGER | Personal fouls |
-| `plus_minus` | REAL | Plus/minus |
-
-**Team_Game_Stats**
-
-| Column | Type | Notes |
-|---|---|---|
-| `game_id` | TEXT | Composite PK, FK → Games |
-| `team_id` | INTEGER | Composite PK, FK → Teams |
-| `opponent_team_id` | INTEGER | |
-| `is_home` | INTEGER | |
-| `points_scored` | INTEGER | |
-| `points_allowed` | INTEGER | |
-| `pace_est` | REAL | |
-| `ortg_est` | REAL | |
-| `drtg_est` | REAL | |
-
-**Defense_Vs_Position**
-
-| Column | Type | Notes |
-|---|---|---|
-| `team_abbreviation` | TEXT | Composite PK |
-| `season` | TEXT | Composite PK |
-| `pos` | TEXT | Composite PK |
-| `vs_pts_mult` | REAL | Default 1.0 |
-| `vs_reb_mult` | REAL | Default 1.0 |
-| `vs_ast_mult` | REAL | Default 1.0 |
-| `vs_stl_mult` | REAL | Default 1.0 |
-| `vs_blk_mult` | REAL | Default 1.0 |
-| `vs_3pm_mult` | REAL | Default 1.0 |
-
-**Team_Roster**
-
-| Column | Type | Notes |
-|---|---|---|
-| `team_id` | INTEGER | Composite PK, FK → Teams |
-| `player_id` | INTEGER | Composite PK, FK → Players |
-| `effective_start_date` | TEXT | Composite PK |
-| `effective_end_date` | TEXT | |
-| `is_two_way` | INTEGER | Default 0 |
-| `is_g_league` | INTEGER | Default 0 |
-
-**Injury_Status**
-
-| Column | Type | Notes |
-|---|---|---|
-| `player_id` | INTEGER | Composite PK, FK → Players |
-| `team_id` | INTEGER | |
-| `report_date` | TEXT | Composite PK |
-| `status` | TEXT | Not null |
-| `reason` | TEXT | |
-| `source` | TEXT | |
-| `last_updated_ts` | TEXT | |
+See repository for license details.
