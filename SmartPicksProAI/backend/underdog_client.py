@@ -294,9 +294,9 @@ def _fetch_pickem_lines(base_url: str) -> list[dict]:
         p_id = str(p.get("id", ""))
         first = p.get("first_name", "")
         last = p.get("last_name", "")
-        sport = p.get("sport_id", "")
-        # Filter to NBA players only
-        if first and last:
+        sport = str(p.get("sport_id", "")).lower()
+        # Only include NBA players
+        if first and last and sport in ("nba", ""):
             player_id_to_name[p_id] = f"{first} {last}"
 
     for app in appearances:
@@ -314,6 +314,7 @@ def _fetch_pickem_lines(base_url: str) -> list[dict]:
         if not player_name:
             continue
 
+        # Prefer "stat" key; fall back to "stat_type" (API schema varies by version)
         stat_label = line_obj.get("stat", "") or line_obj.get("stat_type", "")
         stat_value = line_obj.get("stat_value")
         if stat_value is None:

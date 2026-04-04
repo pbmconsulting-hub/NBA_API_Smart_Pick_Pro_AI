@@ -2096,10 +2096,10 @@ def generate_daily_slate(
                     composite = round(edge_pct * conf_score / 100.0, 4)
 
                     # Cross-platform edge analysis
-                    xplat_edge: dict | None = None
+                    cross_platform_edge: dict | None = None
                     if platform_lines_for_stat and len(platform_lines_for_stat) >= 1:
                         try:
-                            xplat_edge = detect_cross_platform_edge(
+                            cross_platform_edge = detect_cross_platform_edge(
                                 platform_lines=platform_lines_for_stat,
                                 model_projection=projected_avg,
                                 simulation_result=sim_result,
@@ -2127,12 +2127,12 @@ def generate_daily_slate(
                         "platforms_available": list(platform_lines_for_stat.keys()) if platform_lines_for_stat else [],
                     }
 
-                    if xplat_edge:
-                        pick_entry["best_platform"] = xplat_edge.get("best_platform")
-                        pick_entry["best_edge_pct"] = xplat_edge.get("best_edge_pct", 0.0)
-                        pick_entry["line_spread"] = xplat_edge.get("line_spread", 0.0)
-                        pick_entry["mispricing_detected"] = xplat_edge.get("mispricing_detected", False)
-                        pick_entry["platform_edges"] = xplat_edge.get("platforms", [])
+                    if cross_platform_edge:
+                        pick_entry["best_platform"] = cross_platform_edge.get("best_platform")
+                        pick_entry["best_edge_pct"] = cross_platform_edge.get("best_edge_pct", 0.0)
+                        pick_entry["line_spread"] = cross_platform_edge.get("line_spread", 0.0)
+                        pick_entry["mispricing_detected"] = cross_platform_edge.get("mispricing_detected", False)
+                        pick_entry["platform_edges"] = cross_platform_edge.get("platforms", [])
 
                     all_picks.append(pick_entry)
 
@@ -2348,7 +2348,7 @@ def get_cross_platform_comparison(
     if len(season_logs) < _SLATE_MIN_GAMES_FOR_ANALYSIS:
         raise HTTPException(
             status_code=400,
-            detail=f"Not enough game logs ({len(season_logs)}) for analysis.",
+            detail=f"Not enough game logs ({len(season_logs)}/{_SLATE_MIN_GAMES_FOR_ANALYSIS}) for analysis.",
         )
 
     engine_logs = build_engine_game_logs(season_logs)

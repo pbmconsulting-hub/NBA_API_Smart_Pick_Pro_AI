@@ -1553,11 +1553,13 @@ def detect_cross_platform_edge(
         breakeven = _PLATFORM_BREAKEVEN.get(plat_name, 0.5238)
         edge_pct = round((model_prob - breakeven) * 100.0, 2)
 
-        # Edge rating
+        # Edge rating thresholds (as multiples of the per-stat minimum edge)
+        _STRONG_EDGE_MULTIPLIER = 2.0   # 2× the stat's minimum edge = "Strong"
+        _MODERATE_EDGE_MULTIPLIER = 1.0  # 1× the stat's minimum edge = "Moderate"
         min_edge = STAT_EDGE_THRESHOLDS.get(stat_type, 3.0) if stat_type else 3.0
-        if edge_pct >= min_edge * 2:
+        if edge_pct >= min_edge * _STRONG_EDGE_MULTIPLIER:
             edge_rating = "Strong"
-        elif edge_pct >= min_edge:
+        elif edge_pct >= min_edge * _MODERATE_EDGE_MULTIPLIER:
             edge_rating = "Moderate"
         elif edge_pct > 0:
             edge_rating = "Weak"
