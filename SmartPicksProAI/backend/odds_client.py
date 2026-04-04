@@ -254,6 +254,108 @@ def get_consensus_line(
 
 
 # ---------------------------------------------------------------------------
+# Unified cross-platform aggregation
+# ---------------------------------------------------------------------------
+
+
+def fetch_all_platform_odds(conn: sqlite3.Connection) -> dict[str, int]:
+    """Fetch prop lines from all available platforms and cache them.
+
+    Calls The Odds API, PrizePicks, and Underdog Fantasy in sequence.
+    Returns a ``{platform: rows_cached}`` summary dict.  Individual
+    platform failures are logged and do not prevent other platforms from
+    being fetched.
+    """
+    results: dict[str, int] = {}
+
+    # 1. The Odds API (traditional sportsbooks)
+    try:
+        results["the_odds_api"] = fetch_todays_odds(conn)
+    except Exception:
+        logger.exception("Unified fetch: The Odds API failed.")
+        results["the_odds_api"] = 0
+
+    # 2. PrizePicks
+    try:
+        from prizepicks_client import fetch_prizepicks_props
+        results["prizepicks"] = fetch_prizepicks_props(conn)
+    except Exception:
+        logger.exception("Unified fetch: PrizePicks failed.")
+        results["prizepicks"] = 0
+
+    # 3. Underdog Fantasy
+    try:
+        from underdog_client import fetch_underdog_props
+        results["underdog"] = fetch_underdog_props(conn)
+    except Exception:
+        logger.exception("Unified fetch: Underdog Fantasy failed.")
+        results["underdog"] = 0
+
+    total = sum(results.values())
+    logger.info("Unified fetch complete: %d total rows across all platforms.", total)
+    return results
+
+
+def get_all_platform_lines(
+    conn: sqlite3.Connection,
+    player_id: int,
+    stat_type: str,
+    game_date: Optional[str] = None,
+) -> dict[str, float]:
+    """Return ``{source: line}`` aggregated across all platforms.
+
+    Merges traditional sportsbook lines from ``Prop_Lines`` with DFS
+    platform lines from ``DFS_Prop_Lines`` into a single dict.
+
+    Example return::
+
+        {
+            "DraftKings": 24.5,
+            "FanDuel": 25.0,
+            "PrizePicks": 24.5,
+            "Underdog Fantasy": 23.5,
+        }
+    """
+    if game_date is None:
+        game_date = date.today().isoformat()
+
+    # Traditional sportsbook lines
+    merged = get_cached_player_lines(conn, player_id, stat_type, game_date)
+
+    # DFS platform lines (PrizePicks, Underdog Fantasy)
+    try:
+        rows = conn.execute(
+            """
+            SELECT platform, line FROM DFS_Prop_Lines
+            WHERE player_id = ? AND stat_type = ? AND game_date = ?
+                  AND pick_type = 'standard'
+            """,
+            (player_id, stat_type, game_date),
+        ).fetchall()
+        for r in rows:
+            plat = r[0] if isinstance(r, (list, tuple)) else r["platform"]
+            ln = r[1] if isinstance(r, (list, tuple)) else r["line"]
+            merged[plat] = float(ln)
+    except Exception:
+        pass  # DFS_Prop_Lines table may not exist yet
+
+    return merged
+
+
+def get_cross_platform_consensus(
+    conn: sqlite3.Connection,
+    player_id: int,
+    stat_type: str,
+    game_date: Optional[str] = None,
+) -> Optional[float]:
+    """Return the average line across ALL platforms, or ``None``."""
+    lines = get_all_platform_lines(conn, player_id, stat_type, game_date)
+    if not lines:
+        return None
+    return sum(lines.values()) / len(lines)
+
+
+# ---------------------------------------------------------------------------
 # Internal HTTP helpers
 # ---------------------------------------------------------------------------
 

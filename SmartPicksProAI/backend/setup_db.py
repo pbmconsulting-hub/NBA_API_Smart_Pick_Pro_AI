@@ -1388,6 +1388,26 @@ def create_tables(db_path: str = DB_PATH) -> None:
             "ON Prop_Lines (player_id, stat_type, game_date)"
         )
 
+        # ---- DFS Prop Lines table (PrizePicks + Underdog Fantasy) ----
+        logger.info("Creating DFS_Prop_Lines table …")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS DFS_Prop_Lines (
+                player_name     TEXT    NOT NULL,
+                player_id       INTEGER,
+                stat_type       TEXT    NOT NULL,
+                line            REAL    NOT NULL,
+                platform        TEXT    NOT NULL,
+                pick_type       TEXT    DEFAULT 'standard',
+                game_date       TEXT    NOT NULL,
+                fetched_at      TEXT    NOT NULL,
+                PRIMARY KEY (player_name, stat_type, platform, pick_type, game_date)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dfs_prop_lines_player "
+            "ON DFS_Prop_Lines (player_id, stat_type, platform, game_date)"
+        )
+
         # ==================================================================
         # Indexes — driven by the _INDEXES tuple for easy maintenance
         # ==================================================================
