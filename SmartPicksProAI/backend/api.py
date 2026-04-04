@@ -24,7 +24,7 @@ import logging
 import sqlite3
 import sys
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Generator
 
@@ -157,6 +157,34 @@ def _query_one(sql: str, params: tuple = (), *, label: str = "query") -> dict | 
     except sqlite3.Error as exc:
         logger.exception("Error in %s.", label)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _compute_rest_days(team_abbreviation: str) -> int:
+    """Compute rest days for a team based on their most recent game.
+
+    Queries the Games table for the team's last completed game before today
+    and returns the number of calendar days between that game and today.
+    Falls back to 1 if no prior game is found.
+    """
+    today = date.today().isoformat()
+    try:
+        row = _query_one(
+            """
+            SELECT game_date FROM Games
+            WHERE (home_abbrev = ? OR away_abbrev = ?)
+              AND game_date < ?
+            ORDER BY game_date DESC
+            LIMIT 1
+            """,
+            (team_abbreviation, team_abbreviation, today),
+            label="rest_days",
+        )
+        if row and row.get("game_date"):
+            last_game = date.fromisoformat(row["game_date"])
+            return max(0, (date.today() - last_game).days)
+    except Exception as exc:
+        logger.debug("rest_days computation failed: %s", exc)
+    return 1
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -1115,7 +1143,7 @@ def get_player_projection(
             player_data=player_data,
             opponent_team_abbreviation=opponent.upper(),
             is_home_game=is_home,
-            rest_days=1,
+            rest_days=_compute_rest_days(team_abbrev),
             game_total=game_total,
             defensive_ratings_data=defense_data,
             teams_data=teams_data,
@@ -1266,12 +1294,13 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
     recent_5 = engine_logs[:5]
 
     # ── Step 1: Projection ──────────────────────────────────────────
+    rest_days = _compute_rest_days(team_abbrev)
     try:
         projection = build_player_projection(
             player_data=player_data,
             opponent_team_abbreviation=opponent,
             is_home_game=is_home,
-            rest_days=1,
+            rest_days=rest_days,
             game_total=body.game_total,
             defensive_ratings_data=defense_data,
             teams_data=teams_data,
@@ -1313,7 +1342,7 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
     game_ctx = {
         "opponent": opponent,
         "is_home": is_home,
-        "rest_days": 1,
+        "rest_days": rest_days,
         "game_total": body.game_total,
         "vegas_spread": body.vegas_spread,
     }
