@@ -88,10 +88,12 @@ st.set_page_config(
 _init_tracker_db()
 
 # Auto-resolve pending picks from yesterday's box scores
-try:
-    _auto_resolve()
-except Exception:
-    pass  # Never block app startup for auto-resolve
+if not st.session_state.get("_auto_resolve_done"):
+    try:
+        _auto_resolve()
+    except Exception:
+        pass  # Never block app startup for auto-resolve
+    st.session_state["_auto_resolve_done"] = True
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Session-state navigation

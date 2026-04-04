@@ -40,6 +40,10 @@ def render() -> None:
                 st.session_state["prop_player_search"] = bio.get("player_name", "")
         except Exception:
             pass
+    if auto_stat:
+        st.session_state["prop_stat_type"] = auto_stat
+    if auto_line:
+        st.session_state["prop_line_input"] = float(auto_line)
 
     # ── Sidebar inputs ──────────────────────────────────────────────
     with st.sidebar:

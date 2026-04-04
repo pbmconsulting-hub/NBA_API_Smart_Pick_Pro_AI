@@ -349,17 +349,19 @@ def render() -> None:
             if _team_id:
                 roster_data = get_team_roster(int(_team_id))
                 if roster_data:
-                    # Build a mini player dict from bio/last5
+                    # Build a mini player dict from bio/career data (more
+                    # reliable than volatile last-5 averages).
+                    _bio_stats = bio if bio else {}
                     _player_dict = {
                         "player_id": pid,
                         "name": player_name,
-                        "position": bio.get("position", "G") if bio else "G",
-                        "pts": last5.get("averages", {}).get("pts", 0) if last5 else 0,
-                        "reb": last5.get("averages", {}).get("reb", 0) if last5 else 0,
-                        "ast": last5.get("averages", {}).get("ast", 0) if last5 else 0,
-                        "stl": last5.get("averages", {}).get("stl", 0) if last5 else 0,
-                        "blk": last5.get("averages", {}).get("blk", 0) if last5 else 0,
-                        "min": last5.get("averages", {}).get("min", 0) if last5 else 0,
+                        "position": _bio_stats.get("position", "G"),
+                        "pts": float(_bio_stats.get("pts", 0) or 0) or (last5.get("averages", {}).get("pts", 0) if last5 else 0),
+                        "reb": float(_bio_stats.get("reb", 0) or 0) or (last5.get("averages", {}).get("reb", 0) if last5 else 0),
+                        "ast": float(_bio_stats.get("ast", 0) or 0) or (last5.get("averages", {}).get("ast", 0) if last5 else 0),
+                        "stl": float(_bio_stats.get("stl", 0) or 0) or (last5.get("averages", {}).get("stl", 0) if last5 else 0),
+                        "blk": float(_bio_stats.get("blk", 0) or 0) or (last5.get("averages", {}).get("blk", 0) if last5 else 0),
+                        "min": float(_bio_stats.get("min", 0) or 0) or (last5.get("averages", {}).get("min", 0) if last5 else 0),
                     }
 
                     # Build teammate dicts from roster

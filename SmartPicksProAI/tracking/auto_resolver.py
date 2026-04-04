@@ -6,6 +6,7 @@ pending picks to automatically record hit/miss results.
 
 import datetime
 import logging
+from difflib import SequenceMatcher
 
 _logger = logging.getLogger(__name__)
 
@@ -113,17 +114,21 @@ _STAT_KEY_MAP = {
 }
 
 
+def _name_similarity(a: str, b: str) -> float:
+    """Return 0-1 similarity ratio between two player names."""
+    return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
 def _find_player_stat(box_scores: list[dict], player_name: str, stat_type: str) -> float | None:
     """Find a player's stat value in the box score data."""
     stat_key = _STAT_KEY_MAP.get(stat_type.lower())
     if not stat_key:
         return None
 
-    # Normalise player name for fuzzy matching
     target = player_name.lower().strip()
     for ps in box_scores:
         box_name = ps.get("player_name", "").lower().strip()
-        if box_name == target or target in box_name or box_name in target:
+        if _name_similarity(box_name, target) >= 0.85:
             return ps.get(stat_key)
     return None
 
