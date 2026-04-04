@@ -1,4 +1,10 @@
-"""engine/models/train.py – Training script with season holdout validation."""
+"""engine/models/train.py – Training script with time-series holdout validation.
+
+Improvements over the original:
+  • Enforces a date-sorted time-series split (no future leakage).
+  • Logs feature importance from tree-based models.
+  • Drops non-numeric / identifier columns before training.
+"""
 import os
 from utils.logger import get_logger
 
@@ -8,6 +14,14 @@ _SAVED_DIR = os.path.join(os.path.dirname(__file__), "saved")
 _ML_READY_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "ml_ready"
 )
+
+# Columns that are identifiers or text — must not be used as features.
+_DROP_COLS = {
+    "player_name", "player_id", "game_id", "game_date", "wl", "min",
+    "player_position", "player_team_abbrev", "home_abbrev", "away_abbrev",
+    "matchup", "season", "home_team_id", "away_team_id", "opp_team_id",
+    "l10",
+}
 
 
 def _load_ml_ready_data(stat_type: str = "pts"):
@@ -47,8 +61,18 @@ def _load_ml_ready_data(stat_type: str = "pts"):
             _logger.warning("Stat column '%s' not in data", stat_type)
             return None, None, []
 
-        feature_cols = [c for c in df.select_dtypes(include="number").columns if c != stat_type]
-        df = df.dropna(subset=[stat_type] + feature_cols)
+        # Sort by date for time-series integrity
+        if "game_date" in df.columns:
+            df = df.sort_values("game_date").reset_index(drop=True)
+
+        # Select numeric feature columns, excluding target and identifiers
+        feature_cols = [
+            c for c in df.select_dtypes(include="number").columns
+            if c != stat_type and c.lower() not in _DROP_COLS
+        ]
+        df = df.dropna(subset=[stat_type])
+        # Fill any remaining NaN in features with 0
+        df[feature_cols] = df[feature_cols].fillna(0)
 
         X = df[feature_cols].values
         y = df[stat_type].values
@@ -59,8 +83,28 @@ def _load_ml_ready_data(stat_type: str = "pts"):
         return None, None, []
 
 
+def _log_feature_importance(model, feature_cols: list, model_name: str, stat_type: str):
+    """Log top-10 feature importances from a tree-based model."""
+    try:
+        importances = None
+        inner = getattr(model, "_model", None)
+        if inner is not None and hasattr(inner, "feature_importances_"):
+            importances = inner.feature_importances_
+        if importances is not None and len(importances) == len(feature_cols):
+            import numpy as np
+            indices = np.argsort(importances)[::-1][:10]
+            top = [(feature_cols[i], round(float(importances[i]), 4)) for i in indices]
+            _logger.info(
+                "Feature importance (%s/%s): %s",
+                model_name, stat_type,
+                ", ".join(f"{name}={imp}" for name, imp in top),
+            )
+    except Exception as exc:
+        _logger.debug("Feature importance logging failed: %s", exc)
+
+
 def train_models(stat_type: str = "pts") -> dict:
-    """Train all available models with season holdout validation.
+    """Train all available models with time-series holdout validation.
 
     Args:
         stat_type: The target stat column to train on.
@@ -72,13 +116,19 @@ def train_models(stat_type: str = "pts") -> dict:
 
     X, y, feature_cols = _load_ml_ready_data(stat_type)
     if X is None or len(X) < 10:
-        _logger.warning("Insufficient data for training (need ≥10 samples)")
+        _logger.warning("Insufficient data for training (need ≥10 samples, got %d)",
+                        0 if X is None else len(X))
         return {}
 
-    # Season holdout: last 20% of data as validation
+    # Time-series holdout: last 20% of rows (data is date-sorted)
     split = int(len(X) * 0.8)
     X_train, X_val = X[:split], X[split:]
     y_train, y_val = y[:split], y[split:]
+
+    _logger.info(
+        "Training %s models — %d train / %d val samples, %d features",
+        stat_type, len(X_train), len(X_val), len(feature_cols),
+    )
 
     from engine.models.ensemble import ModelEnsemble
     from engine.models.ridge_model import RidgeModel
@@ -90,20 +140,27 @@ def train_models(stat_type: str = "pts") -> dict:
         try:
             model.train(X_train, y_train)
             metrics = model.evaluate(X_val, y_val)
-            results[model.name if hasattr(model, "name") else str(model)] = metrics
+            model_name = model.name if hasattr(model, "name") else str(model)
+            results[model_name] = metrics
 
-            save_path = os.path.join(_SAVED_DIR, f"{getattr(model, 'name', 'model')}_{stat_type}.joblib")
+            save_path = os.path.join(_SAVED_DIR, f"{model_name}_{stat_type}.joblib")
             model.save(save_path)
+
+            # Log feature importances for tree-based sub-models
+            _log_feature_importance(model, feature_cols, model_name, stat_type)
+            if hasattr(model, "models"):
+                for sub in model.models:
+                    _log_feature_importance(sub, feature_cols, sub.name, stat_type)
 
             try:
                 from tracking.model_performance import log_prediction
                 for pred, actual in zip(model.predict(X_val), y_val):
-                    log_prediction(getattr(model, "name", "model"), stat_type, float(pred), float(actual))
+                    log_prediction(model_name, stat_type, float(pred), float(actual))
             except Exception as exc:
                 _logger.debug("Performance logging failed: %s", exc)
 
             _logger.info("Trained %s | MAE=%.3f RMSE=%.3f R²=%.3f",
-                         getattr(model, "name", "model"), metrics["mae"], metrics["rmse"], metrics["r2"])
+                         model_name, metrics["mae"], metrics["rmse"], metrics["r2"])
         except Exception as exc:
             _logger.error("Training failed for %s: %s", model, exc)
 
