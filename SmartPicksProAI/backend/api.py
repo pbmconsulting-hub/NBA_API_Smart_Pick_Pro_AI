@@ -1,40 +1,29 @@
 """
 api.py
 ------
-FastAPI backend for SmartPicksProAI.
+FastAPI backend for SmartPicksProAI — slim entry point.
 
-Serves player and game data from the local SQLite database and exposes an
-admin endpoint to trigger incremental data refreshes on-demand.
+Configures the application, sets up sys.path for the engine package,
+registers CORS middleware, includes all route modules, and keeps the
+health-check endpoint.
 
 Start the server::
 
     python api.py
     # or
     uvicorn api:app --reload
-
-Endpoints
----------
-GET  /api/health                       – Health check.
-GET  /api/players/{player_id}/last5    – Last 5 game logs with computed averages.
-GET  /api/games/today                  – Today's NBA matchups (database only).
-POST /api/admin/refresh-data           – Trigger an incremental data update.
 """
 
 import logging
 import sqlite3
 import sys
-from contextlib import contextmanager
-from datetime import date, timedelta
 from pathlib import Path
-from typing import Generator
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 
-import data_updater
-import setup_db
+import setup_db  # noqa: F401  — needed for DB_PATH side-effect
 
 # Ensure the SmartPicksProAI package root is importable so that the
 # ``engine`` package can be loaded regardless of working directory.
@@ -47,8 +36,6 @@ if _PACKAGE_ROOT not in sys.path:
     sys.path.insert(0, _PACKAGE_ROOT)
 _backend_utils = sys.modules.pop("utils", None)
 if _backend_utils is not None and not hasattr(_backend_utils, "__path__"):
-    # Re-register the single-file backend helper under a distinct name
-    # so existing references (data_updater.utils) keep working.
     sys.modules["backend_utils"] = _backend_utils
 
 logging.basicConfig(
