@@ -117,7 +117,7 @@ def _walk_forward_splits(n_samples: int, num_folds: int, min_fold_size: int):
         min_fold_size: Minimum validation fold size.
 
     Yields:
-        (train_end, val_start, val_end) index tuples.
+        (train_start, train_end, val_start, val_end) index tuples.
     """
     # Reserve the last portion for validation folds
     fold_size = max(min_fold_size, n_samples // (num_folds + 2))

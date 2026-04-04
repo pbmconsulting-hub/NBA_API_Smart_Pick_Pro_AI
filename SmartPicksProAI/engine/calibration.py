@@ -15,6 +15,9 @@
 #                   reliability diagrams, calibration offset
 # ============================================================
 import math
+import numpy as np
+from datetime import date as _date, timedelta
+import datetime as _dt
 def _safe_float(value, fallback=0.0):
     """Return *value* if it is a finite float, otherwise *fallback*.
     Last-line-of-defence guard that prevents NaN or ±inf from leaking
@@ -112,10 +115,6 @@ def _load_historical_predictions(days=90, stat_type=None):
         # based on how many days old it is, using exp(-λ * days_old).
         # λ = 0.05 means half-life ≈ 14 days: records 14 days old get ~50% weight,
         # records 30 days old get ~22% weight, records 60 days old get ~5% weight.
-        import numpy as np
-        from datetime import date as _date, timedelta
-        import datetime as _dt
-
         _DECAY_LAMBDA = 0.05  # Exponential decay rate
 
         weighted_records = []

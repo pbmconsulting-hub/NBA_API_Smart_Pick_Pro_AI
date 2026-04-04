@@ -24,6 +24,9 @@ def refresh_league_averages(season: str = None) -> dict:
     """
     season = season or _constants.DEFAULT_SEASON
 
+    pace = _constants.LEAGUE_AVG_PACE
+    drtg = _constants.LEAGUE_AVG_DRTG
+
     try:
         from nba_api.stats.endpoints import leaguedashteamstats
         import time
@@ -44,15 +47,11 @@ def refresh_league_averages(season: str = None) -> dict:
                 pace = round(float(df["PACE"].mean()), 1)
                 _constants.LEAGUE_AVG_PACE = pace
                 _logger.info("Updated LEAGUE_AVG_PACE to %.1f (season %s)", pace, season)
-            else:
-                pace = _constants.LEAGUE_AVG_PACE
 
             if "DEF_RATING" in df.columns:
                 drtg = round(float(df["DEF_RATING"].mean()), 1)
                 _constants.LEAGUE_AVG_DRTG = drtg
                 _logger.info("Updated LEAGUE_AVG_DRTG to %.1f (season %s)", drtg, season)
-            else:
-                drtg = _constants.LEAGUE_AVG_DRTG
 
             return {"pace": pace, "drtg": drtg}
 
