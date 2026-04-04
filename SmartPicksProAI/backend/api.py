@@ -65,6 +65,7 @@ _SLATE_DEFAULT_VEGAS_SPREAD = 0.0  # Neutral spread when live data unavailable
 _SLATE_MIN_GAMES_FOR_ANALYSIS = 5  # Minimum game logs needed for meaningful analysis
 _INJURY_MINUTES_BOOST_PER_OUT = 0.03  # ~3% extra minutes/usage per teammate ruled Out/Doubtful
 _STANDARD_JUICE_ODDS = 110.0  # Standard -110 American odds for breakeven calculation
+_SLATE_DEFAULT_PLATFORM = "prizepicks"  # Default betting platform for slate analysis
 
 app = FastAPI(
     title="SmartPicksProAI API",
@@ -1333,7 +1334,7 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
                     for p in out_players
                 )
     except Exception as exc:
-        logger.debug("Injury-based projection adjustment failed: %s", exc)
+        logger.warning("Injury-based projection adjustment failed: %s", exc)
 
     try:
         projection = build_player_projection(
@@ -2075,7 +2076,7 @@ def generate_daily_slate(
                             games_played=player_data.get("games_played"),
                             recent_form_ratio=projection.get("recent_form_ratio"),
                             stat_type=stat_type,
-                            platform="prizepicks",
+                            platform=_SLATE_DEFAULT_PLATFORM,
                         )
                     except Exception:
                         confidence = {
