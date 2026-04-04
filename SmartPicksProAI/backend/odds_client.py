@@ -66,7 +66,10 @@ _MARKET_TO_STAT: dict[str, str] = {
 # The prop markets we want to fetch
 _PROP_MARKETS = list(_MARKET_TO_STAT.keys())
 
-# Schema for caching odds
+# Schema for caching odds.
+# NOTE: PRIMARY KEY uses player_name (not player_id) because The Odds API
+# returns names, and player_id can be NULL when the name-map lookup fails.
+# Reads are done via the idx_prop_lines_player index on (player_id, …).
 CREATE_PROP_LINES = """
 CREATE TABLE IF NOT EXISTS Prop_Lines (
     player_name     TEXT    NOT NULL,

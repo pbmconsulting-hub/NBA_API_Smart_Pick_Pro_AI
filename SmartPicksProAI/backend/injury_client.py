@@ -154,13 +154,15 @@ def get_injured_players_for_team(
 ) -> list[dict]:
     """Return injury rows for a given team on the specified date.
 
+    The caller must ensure ``conn.row_factory`` is set to
+    :class:`sqlite3.Row` (done by :func:`api._db`).
+
     Returns a list of dicts with keys:
         player_id, status, reason
     """
     if report_date is None:
         report_date = date.today().isoformat()
 
-    conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
         SELECT i.player_id, i.status, i.reason, p.full_name
@@ -179,11 +181,14 @@ def get_player_injury_status(
     player_id: int,
     report_date: Optional[str] = None,
 ) -> Optional[dict]:
-    """Return the current injury status for a single player, or ``None``."""
+    """Return the current injury status for a single player, or ``None``.
+
+    The caller must ensure ``conn.row_factory`` is set to
+    :class:`sqlite3.Row` (done by :func:`api._db`).
+    """
     if report_date is None:
         report_date = date.today().isoformat()
 
-    conn.row_factory = sqlite3.Row
     row = conn.execute(
         """
         SELECT status, reason, source, last_updated_ts

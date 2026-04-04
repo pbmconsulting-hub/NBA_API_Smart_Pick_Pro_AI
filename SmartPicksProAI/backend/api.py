@@ -88,7 +88,10 @@ app.add_middleware(
 
 @contextmanager
 def _db() -> Generator[sqlite3.Connection, None, None]:
-    """Context manager that opens a read-only SQLite connection and closes it.
+    """Context manager that opens a SQLite connection and closes it.
+
+    The connection supports both reads and writes (used by save/update
+    endpoints as well as query endpoints).
 
     Usage::
 
@@ -1306,7 +1309,9 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             (team_abbrev,),
             label="analyze/team_id",
         )
-        if team_info:
+        if not team_info:
+            logger.warning("Could not find team_id for abbreviation '%s' — skipping injury adjustment.", team_abbrev)
+        else:
             with _db() as inj_conn:
                 team_injuries = injury_client.get_injured_players_for_team(
                     inj_conn, team_info["team_id"],
@@ -1318,8 +1323,11 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
                 and inj.get("player_id") != body.player_id
             ]
             if out_players:
-                # Each key player out adds ~3-5% extra minutes/usage
-                _minutes_adj_factor = 1.0 + _INJURY_MINUTES_BOOST_PER_OUT * len(out_players)
+                # Each key player out adds ~3% extra minutes/usage, capped at 15%
+                _minutes_adj_factor = min(
+                    1.0 + _INJURY_MINUTES_BOOST_PER_OUT * len(out_players),
+                    1.15,
+                )
                 _teammate_out_notes = "; ".join(
                     f"{p.get('full_name', 'Unknown')} ({p.get('status', '?')}: {p.get('reason', 'N/A')})"
                     for p in out_players
@@ -1614,7 +1622,7 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         with _db() as inj_conn:
             injury_info = injury_client.get_player_injury_status(inj_conn, body.player_id)
     except Exception as exc:
-        logger.debug("Could not load injury status: %s", exc)
+        logger.warning("Could not load injury status: %s", exc)
 
     # ── Assemble response ───────────────────────────────────────────
     return {
@@ -2067,12 +2075,16 @@ def generate_daily_slate(
                             games_played=player_data.get("games_played"),
                             recent_form_ratio=projection.get("recent_form_ratio"),
                             stat_type=stat_type,
+                            platform="prizepicks",
                         )
                     except Exception:
                         confidence = {
                             "confidence_score": 50.0,
                             "tier": "Bronze",
+                            "tier_emoji": "🥉",
                             "direction": direction,
+                            "should_avoid": False,
+                            "avoid_reasons": [],
                         }
 
                     conf_score = float(confidence.get("confidence_score", 50.0))
