@@ -350,11 +350,12 @@ def isotonic_calibrate(raw_probability, historical_records, record_weights=None)
         return round(prob, 6)
     except Exception:
         return round(float(raw_probability), 6)
-def get_isotonic_calibration_curve(days=90):
+def get_isotonic_calibration_curve(days=90, stat_type=None):
     """
     Return the full isotonic calibration curve for display on the Model Health page.
     Args:
         days (int): Days of history to include. Default 90.
+        stat_type (str or None): Filter to a specific stat type.
     Returns:
         dict: {
             'has_data': bool,
@@ -373,7 +374,7 @@ def get_isotonic_calibration_curve(days=90):
             print(f"{pt['predicted']:.0%} predicted → {pt['actual']:.0%} actual")
     """
     try:
-        records, weights = _load_historical_predictions(days=days)
+        records, weights = _load_historical_predictions(days=days, stat_type=stat_type)
         total_records = len(records)
         if not records:
             return {"has_data": False, "curve": [], "is_isotonic": False, "total_records": 0}
@@ -477,11 +478,12 @@ def get_calibration_adjustment(raw_probability, days=90, stat_type=None):
         return _safe_float(round(adjustment, 2), 0.0)
     except Exception:
         return 0.0  # Always safe to return 0 on any error
-def get_calibration_summary(days=90):
+def get_calibration_summary(days=90, stat_type=None):
     """
     Return a summary of calibration statistics for the Model Health page.
     Args:
         days (int): Days of historical data to consider.
+        stat_type (str or None): Filter to a specific stat type.
     Returns:
         dict: {
             'has_data': bool,
@@ -492,7 +494,7 @@ def get_calibration_summary(days=90):
         }
     """
     try:
-        records, weights = _load_historical_predictions(days=days)
+        records, weights = _load_historical_predictions(days=days, stat_type=stat_type)
         if not records:
             return {"has_data": False, "total_bets": 0, "calibration_curve": {},
                     "overall_accuracy": None, "overconfidence_buckets": []}

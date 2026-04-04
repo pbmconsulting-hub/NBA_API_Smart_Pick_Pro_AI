@@ -69,6 +69,7 @@ from pages import (
     standings as _pg_standings,
     team_detail as _pg_team_detail,
     teams_browse as _pg_teams_browse,
+    trade_impact as _pg_trade_impact,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -136,6 +137,7 @@ with st.sidebar:
         ("📈  Bet Tracker", "bet_tracker"),
         ("📋  Pick History", "pick_history"),
         ("🩺  Model Health", "model_health"),
+        ("🔀  Trade Impact", "trade_impact"),
         ("🏆  Standings", "standings"),
         ("🏟️  Teams", "teams_browse"),
         ("📊  Leaders & Stats", "leaders"),
@@ -252,6 +254,7 @@ _PAGE_DISPATCH: dict[str, Callable[[], None]] = {
     "pick_history": _pg_pick_history.render,
     "bet_tracker": _pg_bet_tracker.render,
     "model_health": _pg_model_health.render,
+    "trade_impact": _pg_trade_impact.render,
 }
 
 _page_fn = _PAGE_DISPATCH.get(st.session_state.page)

@@ -92,7 +92,7 @@ def render() -> None:
     # ── Detailed tabs ─────────────────────────────────────
     (p_t_last5, p_t_career, p_t_adv, p_t_scoring, p_t_usage,
      p_t_shots, p_t_tracking, p_t_clutch, p_t_hustle,
-     p_t_matchups) = st.tabs([
+     p_t_matchups, p_t_lineup) = st.tabs([
         "📊 Last 5 Games",
         "📈 Career Stats",
         "🧠 Advanced",
@@ -103,6 +103,7 @@ def render() -> None:
         "🔥 Clutch",
         "💪 Hustle",
         "⚔️ Matchups",
+        "👥 Lineup Data",
     ])
 
     with p_t_last5:
@@ -333,3 +334,88 @@ def render() -> None:
             ])
         else:
             st.info("No matchup data.")
+
+    with p_t_lineup:
+        st.caption("Lineup analysis — how this player performs in different 5-man unit combinations.")
+        try:
+            from engine.lineup_analysis import (
+                analyze_lineup_combination,
+                detect_lineup_weaknesses,
+            )
+            from api_service import get_team_roster
+
+            # Get player's team from bio
+            _team_id = bio.get("team_id") if bio else None
+            if _team_id:
+                roster_data = get_team_roster(int(_team_id))
+                if roster_data:
+                    # Build a mini player dict from bio/last5
+                    _player_dict = {
+                        "player_id": pid,
+                        "name": player_name,
+                        "position": bio.get("position", "G") if bio else "G",
+                        "pts": last5.get("averages", {}).get("pts", 0) if last5 else 0,
+                        "reb": last5.get("averages", {}).get("reb", 0) if last5 else 0,
+                        "ast": last5.get("averages", {}).get("ast", 0) if last5 else 0,
+                        "stl": last5.get("averages", {}).get("stl", 0) if last5 else 0,
+                        "blk": last5.get("averages", {}).get("blk", 0) if last5 else 0,
+                        "min": last5.get("averages", {}).get("min", 0) if last5 else 0,
+                    }
+
+                    # Build teammate dicts from roster
+                    teammates = []
+                    for r in roster_data[:12]:  # Top 12 roster players
+                        if r.get("player_id") != pid:
+                            teammates.append({
+                                "player_id": r.get("player_id", 0),
+                                "name": r.get("player", ""),
+                                "position": r.get("position", "G"),
+                                "pts": float(r.get("pts", 0) or 0),
+                                "reb": float(r.get("reb", 0) or 0),
+                                "ast": float(r.get("ast", 0) or 0),
+                                "stl": float(r.get("stl", 0) or 0),
+                                "blk": float(r.get("blk", 0) or 0),
+                                "min": float(r.get("min", 0) or 0),
+                            })
+
+                    if teammates:
+                        lineup = [_player_dict] + teammates[:4]
+                        analysis = analyze_lineup_combination(lineup)
+                        if analysis:
+                            lu_cols = st.columns([1, 1, 1])
+                            lu_cols[0].metric(
+                                "Est. Net Rating",
+                                f"{analysis.get('estimated_net_rating', 0):+.1f}",
+                            )
+                            lu_cols[1].metric(
+                                "Synergy Score",
+                                f"{analysis.get('synergy_score', 0):.1f}",
+                            )
+                            lu_cols[2].metric(
+                                "Lineup Players",
+                                len(lineup),
+                            )
+
+                            # Show lineup members
+                            st.markdown("**Lineup Combination**")
+                            for lp in lineup:
+                                st.text(
+                                    f"  • {lp.get('name', '?')} ({lp.get('position', '?')}) "
+                                    f"— {lp.get('pts', 0):.1f} PPG"
+                                )
+
+                        weaknesses = detect_lineup_weaknesses(lineup)
+                        if weaknesses:
+                            st.markdown("**Detected Weaknesses**")
+                            for w in weaknesses:
+                                st.warning(w)
+                    else:
+                        st.info("No teammate data available.")
+                else:
+                    st.info("Could not load team roster.")
+            else:
+                st.info("Team information not available for lineup analysis.")
+        except ImportError:
+            st.info("Lineup analysis module not available.")
+        except Exception as _exc:
+            st.info(f"Could not generate lineup analysis: {_exc}")
