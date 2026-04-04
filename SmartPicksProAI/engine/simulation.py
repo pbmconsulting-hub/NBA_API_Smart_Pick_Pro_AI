@@ -643,8 +643,9 @@ def run_quantum_matrix_simulation(
 
         all_results = np.where(zero_mask, 0.0, raw_samples)
     elif stat_type in ('steals', 'blocks', 'turnovers'):
-        # Feature 8: Poisson-like discrete sampler
-        # Use empirical mean from game logs when enough history is available
+        # Feature 8: Discrete sampler appropriate for low-count stats.
+        # steals/blocks → Negative Binomial (variance > mean, overdispersed)
+        # turnovers → Poisson (variance ≈ mean)
         logs = recent_game_logs or []
         if logs and len(logs) >= 10:
             base_lam = sum(logs) / len(logs)
@@ -653,9 +654,6 @@ def run_quantum_matrix_simulation(
 
         # Per-sim lambda scaled by effective_mean ratio
         if base_lam is not None and base_lam > 0:
-            # Scale the empirical lambda by the ratio of effective_mean to
-            # the base adjusted projection so that scenario/momentum
-            # adjustments are reflected.
             if adjusted_stat_projection > 1e-6:
                 lam_arr = base_lam * (effective_means / adjusted_stat_projection)
             else:
@@ -663,8 +661,27 @@ def run_quantum_matrix_simulation(
         else:
             lam_arr = effective_means.copy()
         lam_arr = np.clip(lam_arr, 0.1, 20.0)
-        # Vectorized Poisson draw
-        all_results = rng.poisson(lam_arr).astype(np.float64)
+
+        if stat_type in ('steals', 'blocks'):
+            # Negative binomial: variance > mean (overdispersed rare events).
+            # Parametrise via mean (mu) and dispersion (r).
+            # Variance = mu + mu^2/r ; we set r so variance ≈ 1.5*mean.
+            mu_arr = lam_arr
+            overdispersion = 1.5  # variance/mean ratio
+            # r = mu / (overdispersion - 1), clamped to avoid degeneracy
+            r_arr = np.clip(mu_arr / max(overdispersion - 1.0, 0.01), 0.5, 100.0)
+            # Convert to p = r/(r+mu) for numpy parametrisation
+            p_arr = r_arr / (r_arr + mu_arr)
+            p_arr = np.clip(p_arr, 0.01, 0.99)
+            # Negative binomial requires scalar or matching arrays for n/p
+            all_results = np.zeros(n, dtype=np.float64)
+            for i in range(n):
+                ri = float(r_arr) if np.ndim(r_arr) == 0 else float(r_arr[i])
+                pi = float(p_arr) if np.ndim(p_arr) == 0 else float(p_arr[i])
+                all_results[i] = rng.negative_binomial(max(ri, 0.5), pi)
+        else:
+            # Turnovers: Poisson (variance ≈ mean)
+            all_results = rng.poisson(lam_arr).astype(np.float64)
     else:
         # C5: Vectorized skew-normal sampling
         delta = skew_alpha / math.sqrt(1.0 + skew_alpha * skew_alpha) if abs(skew_alpha) >= _SKEW_ALPHA_EPSILON else 0.0
