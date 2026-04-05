@@ -23,6 +23,12 @@ import datetime  # noqa: E402
 st.set_page_config(page_title="Update Data", page_icon="🔄", layout="wide")
 
 try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
+try:
     from SmartPicksProAI.frontend.api_service import trigger_refresh
     _API = True
 except ImportError:
@@ -181,3 +187,6 @@ with tab_status:
     if st.button("🗑️ Clear Streamlit Cache", key="btn_clear_cache"):
         st.cache_data.clear()
         st.success("Streamlit cache cleared.")
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()

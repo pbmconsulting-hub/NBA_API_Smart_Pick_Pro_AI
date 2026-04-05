@@ -33,6 +33,11 @@ from styles.theme import (  # noqa: E402
     get_sidebar_avatar_html,
     get_sidebar_brand_html,
 )
+try:
+    from utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
 from tracking.database import initialize_database as _init_tracker_db  # noqa: E402
 from tracking.auto_resolver import auto_resolve_pending_picks as _auto_resolve  # noqa: E402
 from api_service import (  # noqa: E402
@@ -68,6 +73,7 @@ from pages import (  # noqa: E402
     prop_analyzer as _pg_prop_analyzer,
     schedule as _pg_schedule,
     standings as _pg_standings,
+    studio as _pg_studio,
     team_detail as _pg_team_detail,
     teams_browse as _pg_teams_browse,
     trade_impact as _pg_trade_impact,
@@ -152,6 +158,7 @@ with st.sidebar:
         ("📊  Leaders & Stats", "leaders"),
         ("🛡️  Defense vs Position", "defense"),
         ("🗓️  Schedule", "more"),
+        ("🎙️  The Studio", "studio"),
     ]
     _current_page = st.session_state.page
     for label, page_key in nav_items:
@@ -264,6 +271,7 @@ _PAGE_DISPATCH: dict[str, Callable[[], None]] = {
     "bet_tracker": _pg_bet_tracker.render,
     "model_health": _pg_model_health.render,
     "trade_impact": _pg_trade_impact.render,
+    "studio": _pg_studio.render,
 }
 
 _page_fn = _PAGE_DISPATCH.get(st.session_state.page)
@@ -272,3 +280,6 @@ if _page_fn is not None:
 else:
     st.warning(f"Unknown page: {st.session_state.page}")
     _pg_home.render()
+
+# ── Floating Joseph widget (appears on every page) ──────────────────────
+inject_joseph_floating()

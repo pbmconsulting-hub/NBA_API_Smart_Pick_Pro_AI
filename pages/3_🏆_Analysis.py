@@ -19,6 +19,12 @@ import pandas as pd  # noqa: E402
 st.set_page_config(page_title="Analysis", page_icon="🏆", layout="wide")
 
 try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
+try:
     from SmartPicksProAI.frontend.api_service import (
         analyze_prop,
         search_players,
@@ -226,3 +232,6 @@ with tab_slate:
             )
         else:
             st.info("No slate picks available — check back when games are scheduled.")
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()

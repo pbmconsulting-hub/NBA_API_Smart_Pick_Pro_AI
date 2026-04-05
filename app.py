@@ -51,6 +51,12 @@ except ImportError:
         return ""
 
 try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
+try:
     from SmartPicksProAI.tracking.database import initialize_database as _init_db
     from SmartPicksProAI.tracking.auto_resolver import (
         auto_resolve_pending_picks as _auto_resolve,
@@ -225,3 +231,6 @@ st.caption(
     "Navigate using the sidebar pages: Today's Games, Import Props, "
     "Analysis, Entry Builder, Avoid List, Model Health, Settings, Update Data."
 )
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()

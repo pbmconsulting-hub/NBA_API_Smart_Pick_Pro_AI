@@ -20,6 +20,12 @@ import pandas as pd  # noqa: E402
 
 st.set_page_config(page_title="Import Props", page_icon="📥", layout="wide")
 
+try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
 # ── Session state for imported props ────────────────────────────────────
 if "imported_props" not in st.session_state:
     st.session_state.imported_props = []
@@ -197,3 +203,6 @@ with tab_view:
             )
     else:
         st.info("No props imported yet. Use the tabs above to import props.")
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()

@@ -11,6 +11,7 @@ from pages import (  # noqa: F401
     prop_analyzer,
     schedule,
     standings,
+    studio,
     team_detail,
     teams_browse,
     trade_impact,

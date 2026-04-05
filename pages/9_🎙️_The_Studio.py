@@ -63,6 +63,12 @@ except ImportError:
     _TICKETS_AVAILABLE = False
 
 try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
+try:
     from SmartPicksProAI.frontend.api_service import (  # noqa: E402
         search_players,
         analyze_prop,
@@ -327,3 +333,6 @@ with tab_record:
                     )
         else:
             st.info("No bets tracked yet. Use the Live Analysis tab to generate picks.")
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()
