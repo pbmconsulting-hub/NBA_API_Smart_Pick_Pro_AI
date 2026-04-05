@@ -1,0 +1,21 @@
+player_name,player_id,team,opponent,stat_type,prop_line,direction,platform,game_date
+LeBron James,2544,LAL,BOS,points,24.5,OVER,PrizePicks,2026-04-04
+Stephen Curry,201939,GSW,LAC,threes,4.5,OVER,PrizePicks,2026-04-04
+Nikola Jokic,203999,DEN,MIN,rebounds,12.5,OVER,PrizePicks,2026-04-04
+Giannis Antetokounmpo,203507,MIL,CLE,points,29.5,OVER,PrizePicks,2026-04-04
+Luka Doncic,1629029,DAL,PHX,assists,8.5,OVER,Underdog Fantasy,2026-04-04
+Shai Gilgeous-Alexander,1628983,OKC,HOU,points,30.5,OVER,Underdog Fantasy,2026-04-04
+Joel Embiid,203954,PHI,NYK,rebounds,10.5,UNDER,DraftKings Pick6,2026-04-04
+Ja Morant,1629636,MEM,SAC,assists,7.5,OVER,DraftKings Pick6,2026-04-04
+Anthony Edwards,1630162,MIN,DEN,points,26.5,OVER,FanDuel,2026-04-04
+Damian Lillard,203081,MIL,CLE,threes,3.5,OVER,FanDuel,2026-04-04
+Tyrese Haliburton,1630169,IND,ATL,assists,10.5,UNDER,PrizePicks,2026-04-04
+Victor Wembanyama,1631094,SAS,POR,blocks,3.5,OVER,PrizePicks,2026-04-04
+Chet Holmgren,1630595,OKC,HOU,blocks,2.5,OVER,Underdog Fantasy,2026-04-04
+Russell Westbrook,201566,DEN,MIN,rebounds,5.5,UNDER,PrizePicks,2026-04-04
+Zion Williamson,1629627,NOP,CHA,points,24.5,OVER,FanDuel,2026-04-04
+LeBron James,2544,LAL,BOS,rebounds,7.5,UNDER,PrizePicks,2026-04-04
+Stephen Curry,201939,GSW,LAC,points,25.5,OVER,Underdog Fantasy,2026-04-04
+Nikola Jokic,203999,DEN,MIN,assists,9.5,UNDER,DraftKings Pick6,2026-04-04
+Giannis Antetokounmpo,203507,MIL,CLE,rebounds,11.5,OVER,FanDuel,2026-04-04
+Luka Doncic,1629029,DAL,PHX,points,28.5,OVER,PrizePicks,2026-04-04

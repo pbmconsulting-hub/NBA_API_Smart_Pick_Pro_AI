@@ -1,7 +1,7 @@
 """tracking/auto_resolver.py — Auto-resolve pending picks using NBA box scores.
 
 At app startup, queries yesterday's box scores and matches them against
-pending picks to automatically record hit/miss results.
+pending picks to automatically record win/loss results.
 """
 
 import datetime
@@ -36,7 +36,7 @@ def _load_pending_picks() -> list[dict]:
 
 
 def _update_pick_result(pick_id: int, result: str, actual_value: float | None = None) -> None:
-    """Mark a pick as hit/miss/push with the actual stat value."""
+    """Mark a pick as win/loss/push with the actual stat value."""
     if _get_connection is None:
         return
     try:
@@ -172,9 +172,9 @@ def auto_resolve_pending_picks() -> dict:
             if actual == prop_line:
                 result = "push"
             elif direction == "OVER":
-                result = "hit" if actual > prop_line else "miss"
+                result = "win" if actual > prop_line else "loss"
             else:
-                result = "hit" if actual < prop_line else "miss"
+                result = "win" if actual < prop_line else "loss"
 
             _update_pick_result(pick["bet_id"], result, actual_value=actual)
             resolved += 1

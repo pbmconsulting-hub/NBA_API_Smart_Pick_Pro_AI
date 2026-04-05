@@ -7,7 +7,6 @@
 #              projections.py, edge_detection.py, confidence.py
 # ============================================================
 # Standard library only
-import math
 from engine.math_helpers import calculate_platform_edge_percentage
 # ============================================================
 # SECTION: Narrative Templates
@@ -156,7 +155,6 @@ def _describe_rest(rest_factor, rest_days):
     Returns:
         tuple: (description str, indicator status str)
     """
-    pct = (rest_factor - 1.0) * 100
     if rest_days == 0:
         status = "unfavorable"
         desc = (
@@ -573,7 +571,7 @@ def generate_pick_explanation(
             f"Sharp lines have minimal edge — confidence reduced by "
             f"{line_sharpness_info.get('strength', 0)*2:.0f} points."
         )
-        risk_factors.append(f"📐 Sharp line detected — confidence penalized")
+        risk_factors.append("📐 Sharp line detected — confidence penalized")
     # ---- W5: Trap Line Explanation ----
     trap_line_text = ""
     if trap_line_result and trap_line_result.get("is_trap"):

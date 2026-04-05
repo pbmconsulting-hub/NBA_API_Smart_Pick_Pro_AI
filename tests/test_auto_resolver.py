@@ -9,7 +9,7 @@ _PKG = _REPO / "SmartPicksProAI"
 if str(_PKG) not in sys.path:
     sys.path.insert(0, str(_PKG))
 
-from tracking.auto_resolver import _name_similarity, _find_player_stat
+from tracking.auto_resolver import _name_similarity, _find_player_stat  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -86,21 +86,21 @@ class TestResultLogic:
         if actual == prop_line:
             return "push"
         elif direction == "OVER":
-            return "hit" if actual > prop_line else "miss"
+            return "win" if actual > prop_line else "loss"
         else:
-            return "hit" if actual < prop_line else "miss"
+            return "win" if actual < prop_line else "loss"
 
     def test_over_hit(self):
-        assert self._determine_result(25.0, 20.5, "OVER") == "hit"
+        assert self._determine_result(25.0, 20.5, "OVER") == "win"
 
     def test_over_miss(self):
-        assert self._determine_result(18.0, 20.5, "OVER") == "miss"
+        assert self._determine_result(18.0, 20.5, "OVER") == "loss"
 
     def test_under_hit(self):
-        assert self._determine_result(18.0, 20.5, "UNDER") == "hit"
+        assert self._determine_result(18.0, 20.5, "UNDER") == "win"
 
     def test_under_miss(self):
-        assert self._determine_result(25.0, 20.5, "UNDER") == "miss"
+        assert self._determine_result(25.0, 20.5, "UNDER") == "loss"
 
     def test_push(self):
         assert self._determine_result(20.5, 20.5, "OVER") == "push"

@@ -21,7 +21,9 @@ def _build_game_context(row) -> dict:
         Dict understood by ``predict_player_stat`` and ``build_feature_matrix``.
     """
     ctx = {}
-    _safe = lambda k, default=0: float(row.get(k, default) or default)
+
+    def _safe(k, default=0):
+        return float(row.get(k, default) or default)
 
     ctx["rest_days"] = int(_safe("rest_days", 1))
     ctx["is_home"] = bool(int(_safe("is_home", 0)))

@@ -1,7 +1,6 @@
 """Trade Impact page — evaluate how trades affect player projections."""
 import logging
 import streamlit as st
-from pages._shared import nav, show_df
 from api_service import search_players, get_teams
 
 _logger = logging.getLogger(__name__)

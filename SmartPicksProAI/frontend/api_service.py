@@ -457,7 +457,7 @@ def get_pick_history(limit: int = 50) -> list[dict]:
     Returns:
         List of pick dicts, newest first.
     """
-    return _get(f"/api/picks/history", params={"limit": limit}, key="picks")
+    return _get("/api/picks/history", params={"limit": limit}, key="picks")
 
 
 def update_pick_result(pick_id: int, result: str, actual_value: float | None = None) -> dict:

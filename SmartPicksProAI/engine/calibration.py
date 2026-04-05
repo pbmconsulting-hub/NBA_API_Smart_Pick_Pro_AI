@@ -15,8 +15,7 @@
 #                   reliability diagrams, calibration offset
 # ============================================================
 import math
-import numpy as np
-from datetime import date as _date, timedelta
+from datetime import date as _date
 import datetime as _dt
 def _safe_float(value, fallback=0.0):
     """Return *value* if it is a finite float, otherwise *fallback*.

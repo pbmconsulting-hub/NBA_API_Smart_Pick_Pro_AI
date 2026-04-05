@@ -69,25 +69,25 @@ VALID_STAT_TYPES = (
 # ============================================================
 
 # simulation.py — Quantum Matrix Engine
-from engine.simulation import (
-    run_enhanced_simulation,          # QME + game-script blended simulation
+from engine.simulation import (  # noqa: E402
+    run_enhanced_simulation,          # noqa: F401 – QME + game-script blended simulation
 )
 
 # edge_detection.py — Advanced Edge Analysis
-from engine.edge_detection import (
-    estimate_closing_line_value,      # CLV estimation
-    calculate_dynamic_vig,            # Dynamic vig by platform
+from engine.edge_detection import (  # noqa: E402
+    estimate_closing_line_value,      # noqa: F401 – CLV estimation
+    calculate_dynamic_vig,            # noqa: F401 – Dynamic vig by platform
 )
 
 # confidence.py — Precision Confidence Scoring
-from engine.confidence import (
-    calculate_risk_score,             # Composite 1-10 risk rating
-    enforce_tier_distribution,        # Tier distribution guardrails
+from engine.confidence import (  # noqa: E402
+    calculate_risk_score,             # noqa: F401 – Composite 1-10 risk rating
+    enforce_tier_distribution,        # noqa: F401 – Tier distribution guardrails
 )
 
 # correlation.py — Advanced Correlation Engine
-from engine.correlation import (
-    get_position_correlation_adjustment,  # Position-based correlation priors
-    get_correlation_confidence,           # Parlay correlation confidence
-    correlation_adjusted_kelly,           # Correlation-adjusted Kelly sizing
+from engine.correlation import (  # noqa: E402
+    get_position_correlation_adjustment,  # noqa: F401 – Position-based correlation priors
+    get_correlation_confidence,           # noqa: F401 – Parlay correlation confidence
+    correlation_adjusted_kelly,           # noqa: F401 – Correlation-adjusted Kelly sizing
 )

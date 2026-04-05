@@ -28,14 +28,14 @@ _PACKAGE_ROOT = _FRONTEND_DIR.parent
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
-from styles.theme import (
+from styles.theme import (  # noqa: E402
     get_global_css,
     get_sidebar_avatar_html,
     get_sidebar_brand_html,
 )
-from tracking.database import initialize_database as _init_tracker_db
-from tracking.auto_resolver import auto_resolve_pending_picks as _auto_resolve
-from api_service import (
+from tracking.database import initialize_database as _init_tracker_db  # noqa: E402
+from tracking.auto_resolver import auto_resolve_pending_picks as _auto_resolve  # noqa: E402
+from api_service import (  # noqa: E402
     get_defense_vs_position,
     get_league_leaders,
     get_player_last5,
@@ -48,7 +48,7 @@ from api_service import (
     search_players,
     trigger_refresh,
 )
-from pages._shared import (
+from pages._shared import (  # noqa: E402
     DEFAULT_BANKROLL,
     load_persisted_bankroll,
     nav,
@@ -56,7 +56,7 @@ from pages._shared import (
 )
 
 # ── Page modules (lazy-ish: imported once at startup) ────────
-from pages import (
+from pages import (  # noqa: E402
     bet_tracker as _pg_bet_tracker,
     defense as _pg_defense,
     game_detail as _pg_game_detail,

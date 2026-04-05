@@ -536,7 +536,8 @@ def build_player_projection(
             recent_pts = _recent_avg(recent_form_games, pts_key, season_points_average)
             if season_points_average > 0:
                 recent_form_ratio = round(recent_pts / season_points_average, 3)
-            _blend = lambda season, recent: season * SEASON_AVG_WEIGHT + recent * RECENT_FORM_WEIGHT
+            def _blend(season, recent):
+                return season * SEASON_AVG_WEIGHT + recent * RECENT_FORM_WEIGHT
             season_points_average   = _blend(season_points_average,   recent_pts)
             season_rebounds_average = _blend(season_rebounds_average,
                                              _recent_avg(recent_form_games, form_key_map["rebounds"], season_rebounds_average))

@@ -4,9 +4,6 @@
 # provides a minutes trend factor for projection adjustments.
 # Standard library only — no numpy/scipy/pandas.
 
-import statistics
-
-
 # Minutes threshold to be considered a starter
 STARTER_MINUTES_THRESHOLD = 25.0
 

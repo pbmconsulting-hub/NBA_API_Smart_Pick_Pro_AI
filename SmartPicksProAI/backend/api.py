@@ -1061,7 +1061,6 @@ def get_player_projection(
 
     from engine.data_adapter import (
         build_engine_defense_data,
-        build_engine_game_context,
         build_engine_game_logs,
         build_engine_player_data,
         build_engine_teams_data,
