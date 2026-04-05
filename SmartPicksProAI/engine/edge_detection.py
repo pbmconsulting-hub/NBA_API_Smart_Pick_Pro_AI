@@ -78,6 +78,8 @@ def analyze_directional_forces(
     game_context,
     platform_lines=None,
     recent_form_ratio=None,
+    advanced_context=None,
+    hustle_context=None,
 ) -> dict:
     """
     Identify all forces pushing the stat OVER or UNDER the line.
@@ -351,6 +353,121 @@ def analyze_directional_forces(
                 "strength": round(strength, 2),
                 "direction": "OVER",
             })
+    # --- Force 11: Advanced Stats Signal (PIE / TS% / E_NET_RATING) ---
+    # When advanced box score or estimated metrics are available, use them
+    # as directional signals. High PIE + high TS% = player is performing
+    # above average in meaningful ways → OVER signal.
+    if advanced_context:
+        _pie = advanced_context.get("pie")
+        _ts = advanced_context.get("ts_pct")
+        _e_net = advanced_context.get("e_net_rating")
+        _e_pace = advanced_context.get("e_pace")
+
+        # PIE signal: above 0.15 is a strong impact player
+        if _pie is not None:
+            try:
+                pie_val = float(_pie)
+                if pie_val > 1.0:
+                    pie_val = pie_val / 100.0
+                if pie_val > 0.15:
+                    strength = min(1.5, (pie_val - 0.10) * 10.0)
+                    all_over_forces.append({
+                        "name": "High Player Impact (PIE)",
+                        "description": (
+                            f"PIE of {pie_val:.3f} is well above league avg (0.10) "
+                            "— player is highly impactful this season"
+                        ),
+                        "strength": round(strength, 2),
+                        "direction": "OVER",
+                    })
+                elif pie_val < 0.05:
+                    strength = min(1.0, (0.10 - pie_val) * 8.0)
+                    all_under_forces.append({
+                        "name": "Low Player Impact (PIE)",
+                        "description": (
+                            f"PIE of {pie_val:.3f} is below league avg (0.10) "
+                            "— limited on-court impact this season"
+                        ),
+                        "strength": round(strength, 2),
+                        "direction": "UNDER",
+                    })
+            except (TypeError, ValueError):
+                pass
+
+        # E_PACE signal: estimated pace affects counting stat ceilings
+        if _e_pace is not None:
+            try:
+                e_pace_val = float(_e_pace)
+                _LEAGUE_AVG_PACE = 98.5
+                if e_pace_val > _LEAGUE_AVG_PACE * 1.04:
+                    strength = min(1.0, (e_pace_val - _LEAGUE_AVG_PACE) / _LEAGUE_AVG_PACE * 10.0)
+                    all_over_forces.append({
+                        "name": "High Estimated Pace",
+                        "description": (
+                            f"Estimated pace {e_pace_val:.1f} is above league avg "
+                            f"({_LEAGUE_AVG_PACE}) — more possessions = more counting stats"
+                        ),
+                        "strength": round(strength, 2),
+                        "direction": "OVER",
+                    })
+                elif e_pace_val < _LEAGUE_AVG_PACE * 0.96:
+                    strength = min(1.0, (_LEAGUE_AVG_PACE - e_pace_val) / _LEAGUE_AVG_PACE * 10.0)
+                    all_under_forces.append({
+                        "name": "Low Estimated Pace",
+                        "description": (
+                            f"Estimated pace {e_pace_val:.1f} is below league avg "
+                            f"({_LEAGUE_AVG_PACE}) — fewer possessions = fewer counting stats"
+                        ),
+                        "strength": round(strength, 2),
+                        "direction": "UNDER",
+                    })
+            except (TypeError, ValueError):
+                pass
+
+    # --- Force 12: Hustle Stats Signal ---
+    # When hustle data aligns with the stat type, add a directional force.
+    if hustle_context:
+        stat_type_lower = str(stat_type).lower() if stat_type else ""
+        if stat_type_lower in ("rebounds", "offensive_rebounds", "defensive_rebounds"):
+            _boxouts = hustle_context.get("boxouts", 0.0)
+            if _boxouts > 4.0:
+                strength = min(1.5, (_boxouts - 2.5) * 0.4)
+                all_over_forces.append({
+                    "name": "High Box Out Rate",
+                    "description": (
+                        f"Averaging {_boxouts:.1f} box outs/game (league avg ~2.5) "
+                        "— directly correlated with rebound production"
+                    ),
+                    "strength": round(strength, 2),
+                    "direction": "OVER",
+                })
+        elif stat_type_lower in ("steals", "blocks_steals"):
+            _defl = hustle_context.get("deflections", 0.0)
+            if _defl > 3.0:
+                strength = min(1.5, (_defl - 2.0) * 0.4)
+                all_over_forces.append({
+                    "name": "High Deflection Rate",
+                    "description": (
+                        f"Averaging {_defl:.1f} deflections/game (league avg ~2.0) "
+                        "— strong predictor of steals and blocks"
+                    ),
+                    "strength": round(strength, 2),
+                    "direction": "OVER",
+                })
+        elif stat_type_lower in ("assists", "points_assists"):
+            _scr_ast = hustle_context.get("screen_assists", 0.0)
+            if _scr_ast > 2.0:
+                strength = min(1.0, (_scr_ast - 1.0) * 0.3)
+                all_over_forces.append({
+                    "name": "High Screen Assist Rate",
+                    "description": (
+                        f"Averaging {_scr_ast:.1f} screen assists/game "
+                        "— indicates strong offensive facilitator role"
+                    ),
+                    "strength": round(strength, 2),
+                    "direction": "OVER",
+                })
+
     # ============================================================
     # SECTION: Summarize Forces
     # ============================================================
