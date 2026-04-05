@@ -7,7 +7,7 @@ _logger = get_logger(__name__)
 
 _SAVED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "saved")
 _DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "db", "smartpicks.db"
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "backend", "smartpicks.db"
 )
 
 

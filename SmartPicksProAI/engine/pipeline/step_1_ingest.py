@@ -14,7 +14,7 @@ _RAW_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "raw"
 )
 _DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "db", "smartpicks.db"
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "backend", "smartpicks.db"
 )
 
 
