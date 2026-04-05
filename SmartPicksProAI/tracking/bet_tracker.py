@@ -209,12 +209,12 @@ def get_current_streak() -> dict:
     if not bets:
         return {"streak_type": "none", "streak_length": 0, "streak_bets": []}
 
-    # Sort by date descending (most recent first) then by id desc
+    # Sort by date descending (most recent first) then by bet_id desc
     resolved = [
         b for b in bets
         if b.get("result") in ("win", "loss")
     ]
-    resolved.sort(key=lambda b: (b.get("bet_date", ""), b.get("id", 0)), reverse=True)
+    resolved.sort(key=lambda b: (b.get("bet_date", ""), b.get("bet_id", 0)), reverse=True)
 
     if not resolved:
         return {"streak_type": "none", "streak_length": 0, "streak_bets": []}
@@ -246,7 +246,7 @@ def get_longest_streaks() -> dict:
         b for b in bets
         if b.get("result") in ("win", "loss")
     ]
-    resolved.sort(key=lambda b: (b.get("bet_date", ""), b.get("id", 0)))
+    resolved.sort(key=lambda b: (b.get("bet_date", ""), b.get("bet_id", 0)))
 
     longest_win = 0
     longest_loss = 0
@@ -400,7 +400,7 @@ def export_bets_csv(
         return ""
 
     columns = [
-        "id", "bet_date", "player_name", "stat_type", "prop_line",
+        "bet_id", "bet_date", "player_name", "stat_type", "prop_line",
         "direction", "result", "actual_value", "team", "opponent",
         "platform", "confidence_score", "confidence_tier",
         "model_probability", "edge_pct", "kelly_fraction",
