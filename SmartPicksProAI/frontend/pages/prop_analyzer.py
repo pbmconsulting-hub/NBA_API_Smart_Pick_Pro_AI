@@ -14,6 +14,7 @@ import streamlit as st
 
 from pages._shared import (
     ANALYSIS_STAT_TYPES,
+    DEFAULT_BANKROLL,
     MAX_SEARCH_RESULTS,
     TIER_EMOJI,
 )
@@ -503,7 +504,7 @@ def _render_analysis_tabs(
             "Payout",
             f"{bankroll.get('payout_multiplier', 1.909):.3f}x",
         )
-        _bankroll = st.session_state.get("user_bankroll", 500.0)
+        _bankroll = st.session_state.get("user_bankroll", DEFAULT_BANKROLL)
         if kelly_frac > 0:
             example_bet = round(kelly_frac * _bankroll, 2)
             bet_cols[3].metric(f"${_bankroll:.0f} Bankroll →", f"${example_bet:.2f}")
@@ -570,7 +571,7 @@ def _render_analysis_tabs(
                 "tier": tier,
                 "kelly_fraction": kelly_frac,
                 "recommended_bet": round(
-                    kelly_frac * st.session_state.get("user_bankroll", 500.0), 2
+                    kelly_frac * st.session_state.get("user_bankroll", DEFAULT_BANKROLL), 2
                 ),
                 "regime_flag": regime_dir,
                 "platform": platform,
@@ -955,7 +956,7 @@ def render() -> None:
                         res["direction"] = res.get("direction", prop.get("direction", "OVER"))
                         bulk_results.append(res)
                     except Exception as exc:
-                        st.warning(f"⚠️ Error analysing {pname}: {exc}")
+                        st.warning(f"⚠️ Error analyzing {pname}: {exc}")
 
                 progress.progress(1.0, text="Bulk analysis complete!")
                 st.session_state["bulk_results"] = bulk_results
