@@ -19,6 +19,12 @@ import pandas as pd  # noqa: E402
 st.set_page_config(page_title="Entry Builder", page_icon="🎰", layout="wide")
 
 try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
+try:
     from SmartPicksProAI.engine.entry_optimizer import (  # noqa: F401
         optimize_entry,
         validate_entry,
@@ -202,3 +208,6 @@ with tab_history:
                 st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         st.info("No entries submitted yet.")
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()

@@ -22,6 +22,12 @@ import json  # noqa: E402
 
 st.set_page_config(page_title="Settings", page_icon="⚙️", layout="wide")
 
+try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
 # ── Settings persistence ────────────────────────────────────────────────
 _SETTINGS_DIR = Path.home() / ".smartpickpro"
 _SETTINGS_FILE = _SETTINGS_DIR / "settings.json"
@@ -239,3 +245,6 @@ with col2:
             _SETTINGS_FILE.unlink()
         st.success("Settings reset to defaults.")
         st.rerun()
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()

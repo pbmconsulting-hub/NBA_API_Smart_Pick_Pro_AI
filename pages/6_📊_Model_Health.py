@@ -18,6 +18,12 @@ import pandas as pd  # noqa: E402
 
 st.set_page_config(page_title="Model Health", page_icon="📊", layout="wide")
 
+try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
 BREAK_EVEN_WIN_RATE = 52.4
 
 st.title("📊 Model Health")
@@ -182,3 +188,6 @@ with tab_drift:
             st.info("Not enough data for drift detection.")
     else:
         st.warning("Calibration module not available.")
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()

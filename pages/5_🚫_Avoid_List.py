@@ -19,6 +19,12 @@ import datetime  # noqa: E402
 
 st.set_page_config(page_title="Avoid List", page_icon="🚫", layout="wide")
 
+try:
+    from SmartPicksProAI.utils.components import inject_joseph_floating  # noqa: E402
+except ImportError:
+    def inject_joseph_floating() -> None:  # type: ignore[misc]
+        pass
+
 # ── Session state ───────────────────────────────────────────────────────
 if "avoid_list" not in st.session_state:
     st.session_state.avoid_list = []
@@ -194,3 +200,6 @@ with tab_rules:
         "Custom avoid rules will be available in a future update. "
         "For now, use the manual entry and auto-detect features."
     )
+
+# ── Floating Joseph widget ──────────────────────────────────────────────
+inject_joseph_floating()
