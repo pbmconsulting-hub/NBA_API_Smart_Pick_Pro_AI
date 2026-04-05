@@ -197,7 +197,10 @@ def predict_player_stat(
                 stat_map = {
                     "pts": "points", "reb": "rebounds", "ast": "assists",
                     "stl": "steals", "blk": "blocks", "tov": "turnovers",
-                    "fg3m": "threes", "ftm": "points",
+                    "fg3m": "threes", "ftm": "ftm", "fta": "fta",
+                    "fgm": "fgm", "fga": "fga", "min": "minutes",
+                    "oreb": "offensive_rebounds", "dreb": "defensive_rebounds",
+                    "pf": "personal_fouls",
                 }
                 matchup_stat = stat_map.get(stat_type, stat_type)
                 history = get_player_vs_team_history(
