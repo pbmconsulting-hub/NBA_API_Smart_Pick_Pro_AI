@@ -210,7 +210,8 @@ def estimate_quarter_minutes(avg_quarter_minutes, quarter, score_differential,
 # SECTION: Game Script Simulation
 # ============================================================
 
-def simulate_game_script(player_projection, game_context, num_simulations=500):
+def simulate_game_script(player_projection, game_context, num_simulations=500,
+                         clutch_context=None):
     """
     Simulate a player's stat distribution using quarter-by-quarter game script.
 
@@ -271,6 +272,35 @@ def simulate_game_script(player_projection, game_context, num_simulations=500):
 
     # Per-minute production rate (stat per minute on the court)
     stat_per_minute = projected_stat / max(1.0, projected_minutes)
+
+    # Clutch stats adjustment: modify close-game behavior based on actual clutch performance
+    # When clutch_context is available, use it to adjust how the player performs
+    # in the last 5 minutes of close games (score within 5 points).
+    clutch_q4_multiplier = 1.0
+    if clutch_context:
+        clutch_gp = clutch_context.get("gp", 0)
+        clutch_pts = clutch_context.get("pts", 0)
+        clutch_min_val = clutch_context.get("min", 0)
+        clutch_plus_minus = clutch_context.get("plus_minus", 0)
+
+        # Only apply if player has enough clutch games for a reliable signal
+        if clutch_gp >= 5 and clutch_min_val > 0:
+            # Clutch scoring rate: pts per minute in clutch situations
+            clutch_rate = clutch_pts / max(1.0, clutch_min_val)
+            # Compare to overall per-minute rate
+            if stat_per_minute > 0:
+                clutch_ratio = clutch_rate / stat_per_minute
+                # Clutch ratio > 1.0 = player elevates in crunch time
+                # Clutch ratio < 1.0 = player shrinks in crunch time
+                # Scale: each 1.0 deviation in ratio → 20% Q4 adjustment, capped ±8%
+                clutch_q4_multiplier = 1.0 + (clutch_ratio - 1.0) * 0.2
+                clutch_q4_multiplier = max(0.92, min(1.08, clutch_q4_multiplier))
+
+            # Plus/minus in clutch: positive = team wins close games with this player
+            if clutch_plus_minus > 3.0:
+                close_game_boost += 0.02  # Extra +2% for proven clutch closer
+            elif clutch_plus_minus < -3.0:
+                close_game_boost = max(0.0, close_game_boost - 0.01)  # Reduce close-game boost
 
     # Average minutes per quarter based on full game projection
     avg_quarter_minutes = projected_minutes / 4.0
@@ -333,6 +363,12 @@ def simulate_game_script(player_projection, game_context, num_simulations=500):
         # Apply close-game extra effort for stars
         if close_game_boost > 0 and not game_became_blowout:
             raw_stat *= (1.0 + close_game_boost)
+
+        # Apply clutch Q4 multiplier for close-game simulations
+        # When clutch data shows the player elevates/shrinks in crunch time,
+        # adjust the stat output proportionally for close-game simulations.
+        if not game_became_blowout and abs(clutch_q4_multiplier - 1.0) >= 0.005:
+            raw_stat *= clutch_q4_multiplier
 
         simulated_stat = max(0.0, raw_stat)
         simulated_values.append(simulated_stat)

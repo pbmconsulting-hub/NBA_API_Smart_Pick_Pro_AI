@@ -1191,8 +1191,12 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
     from engine.data_adapter import (
         STAT_TYPE_TO_DB_COL,
         STAT_TYPE_TO_PROJECTION_KEY,
+        build_engine_advanced_context,
+        build_engine_clutch_context,
         build_engine_defense_data,
         build_engine_game_logs,
+        build_engine_hustle_context,
+        build_engine_matchup_defender_context,
         build_engine_player_data,
         build_engine_teams_data,
         compute_season_averages,
@@ -1213,6 +1217,9 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
     from engine.matchup_history import calculate_matchup_adjustment, get_player_vs_team_history
     from engine.rotation_tracker import detect_role_change, get_minutes_adjustment
     from engine.stat_distributions import get_over_probability
+
+    # Phase 5 engine modules — market movement & advanced data
+    from engine.market_movement import detect_line_movement, get_movement_summary, track_line_snapshot
 
     # --- Validate stat type ---
     stat_type = body.stat_type.lower()
@@ -1335,6 +1342,70 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
     except Exception as exc:
         logger.warning("Injury-based projection adjustment failed: %s", exc)
 
+    # ── Fetch advanced data from Box_Score_Advanced, Hustle, Clutch, Matchups ──
+    advanced_context: dict | None = None
+    hustle_context: dict | None = None
+    clutch_context: dict | None = None
+    matchup_defender_context: dict | None = None
+
+    try:
+        adv_rows = _query_rows(
+            "SELECT * FROM Box_Score_Advanced WHERE person_id = ? ORDER BY game_id DESC LIMIT 20",
+            (body.player_id,),
+            label="analyze/advanced",
+        )
+        est_metrics_row = _query_one(
+            "SELECT * FROM Player_Estimated_Metrics WHERE player_id = ? ORDER BY rowid DESC LIMIT 1",
+            (body.player_id,),
+            label="analyze/estimated_metrics",
+        )
+        advanced_context = build_engine_advanced_context(adv_rows, est_metrics_row) or None
+    except Exception as exc:
+        logger.debug("Advanced context fetch failed: %s", exc)
+
+    try:
+        hustle_rows = _query_rows(
+            "SELECT * FROM Box_Score_Hustle WHERE person_id = ? ORDER BY game_id DESC LIMIT 20",
+            (body.player_id,),
+            label="analyze/hustle",
+        )
+        hustle_context = build_engine_hustle_context(hustle_rows) or None
+    except Exception as exc:
+        logger.debug("Hustle context fetch failed: %s", exc)
+
+    try:
+        clutch_row = _query_one(
+            "SELECT * FROM Player_Clutch_Stats WHERE player_id = ? ORDER BY rowid DESC LIMIT 1",
+            (body.player_id,),
+            label="analyze/clutch",
+        )
+        clutch_context = build_engine_clutch_context(clutch_row) or None
+    except Exception as exc:
+        logger.debug("Clutch context fetch failed: %s", exc)
+
+    try:
+        # Fetch individual matchup data for this player against the opponent
+        opponent_team_info = _query_one(
+            "SELECT team_id FROM Teams WHERE abbreviation = ?",
+            (opponent,),
+            label="analyze/opponent_team_id",
+        )
+        if opponent_team_info:
+            matchup_rows = _query_rows(
+                """
+                SELECT bsm.* FROM Box_Score_Matchups bsm
+                JOIN Games g ON g.game_id = bsm.game_id
+                WHERE bsm.person_id_off = ?
+                  AND bsm.team_id = ?
+                ORDER BY g.game_date DESC LIMIT 30
+                """,
+                (body.player_id, opponent_team_info["team_id"]),
+                label="analyze/matchups",
+            )
+            matchup_defender_context = build_engine_matchup_defender_context(matchup_rows) or None
+    except Exception as exc:
+        logger.debug("Matchup defender context fetch failed: %s", exc)
+
     try:
         projection = build_player_projection(
             player_data=player_data,
@@ -1348,6 +1419,9 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             vegas_spread=body.vegas_spread,
             minutes_adjustment_factor=_minutes_adj_factor,
             teammate_out_notes=_teammate_out_notes,
+            advanced_context=advanced_context,
+            hustle_context=hustle_context,
+            matchup_defender_context=matchup_defender_context,
         )
     except Exception as exc:
         logger.exception("Projection failed for player %d.", body.player_id)
@@ -1409,6 +1483,8 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             game_context=game_ctx,
             platform_lines=platform_lines,
             recent_form_ratio=projection.get("recent_form_ratio"),
+            advanced_context=advanced_context,
+            hustle_context=hustle_context,
         )
     except Exception as exc:
         logger.warning("Edge detection failed: %s", exc)
@@ -1446,6 +1522,8 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             recent_form_ratio=projection.get("recent_form_ratio"),
             stat_type=stat_type,
             platform=body.platform,
+            advanced_context=advanced_context,
+            hustle_context=hustle_context,
         )
     except Exception as exc:
         logger.warning("Confidence scoring failed: %s", exc)
@@ -1508,7 +1586,8 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
             "game_total": body.game_total,
             "is_home": is_home,
         }
-        gs_result = simulate_game_script(gs_projection, gs_context)
+        gs_result = simulate_game_script(gs_projection, gs_context,
+                                          clutch_context=clutch_context)
         flat_for_blend = {
             "mean": float(sim_result.get("simulated_mean", projected_avg)),
             "std": float(sim_result.get("simulated_std", stat_std)),
@@ -1596,6 +1675,43 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         logger.warning("Efficiency profile failed: %s", exc)
         efficiency = {"error": "efficiency_unavailable"}
 
+    # ── Step 11½: Market movement detection (Phase 5) ──────────────
+    # Track the current line as a snapshot and detect movement from
+    # opening line. Line movement is one of the strongest edge signals.
+    market_movement: dict | None = None
+    try:
+        player_name_for_mm = player_data.get("name", "")
+        if player_name_for_mm:
+            # Store current line snapshot for future movement tracking
+            track_line_snapshot(
+                player_name_for_mm, stat_type,
+                body.platform, body.prop_line,
+            )
+            # Get movement summary (opening → current)
+            mm_summary = get_movement_summary(
+                player_name_for_mm, stat_type, platform=body.platform,
+            )
+            if mm_summary.get("has_movement_data") and mm_summary.get("initial_line"):
+                mm_signal = detect_line_movement(
+                    player_name=player_name_for_mm,
+                    stat_type=stat_type,
+                    initial_line=mm_summary["initial_line"],
+                    current_line=mm_summary["current_line"],
+                    model_direction=direction,
+                )
+                market_movement = {
+                    "initial_line": mm_summary["initial_line"],
+                    "current_line": mm_summary["current_line"],
+                    "movement": mm_summary.get("movement"),
+                    "time_span_hours": mm_summary.get("time_span_hours"),
+                    "signal": mm_signal.get("sharp_money_signal"),
+                    "agrees_with_model": mm_signal.get("agrees_with_model"),
+                    "confidence_adjustment": mm_signal.get("confidence_adjustment", 0.0),
+                    "interpretation": mm_signal.get("interpretation", ""),
+                }
+    except Exception as exc:
+        logger.debug("Market movement detection failed: %s", exc)
+
     # ── Step 12: Explanation ────────────────────────────────────────
     try:
         explanation = generate_pick_explanation(
@@ -1655,6 +1771,12 @@ def analyze_prop(body: PropAnalysisRequest) -> dict:
         # Phase 5 — live odds & injury integration
         "platform_lines": platform_lines,
         "injury_status": injury_info,
+        # Phase 5 — advanced data signals
+        "advanced_context": advanced_context,
+        "hustle_context": hustle_context,
+        "clutch_context": clutch_context,
+        "matchup_defender": matchup_defender_context,
+        "market_movement": market_movement,
     }
 
 

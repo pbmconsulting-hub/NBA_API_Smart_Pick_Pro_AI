@@ -154,6 +154,8 @@ def calculate_confidence_score(
     platform: str | None = None,
     on_off_data: dict | None = None,
     matchup_data: dict | None = None,
+    advanced_context: dict | None = None,
+    hustle_context: dict | None = None,
 ) -> dict:
     """
     Calculate a 0-100 SAFE Score (Statistical Analysis of Force & Edge) for a prop pick.
@@ -386,6 +388,61 @@ def calculate_confidence_score(
             base_adj *= 2.0
         streak_adjustment = max(-STREAK_MAX_ADJUSTMENT, min(STREAK_MAX_ADJUSTMENT, base_adj))
         combined_score += streak_adjustment
+    # --- Advanced Stats Confidence Bonus ---
+    # When real advanced box score data (PIE, TS%, estimated metrics) is available,
+    # the projection is more informed and deserves a confidence uplift.
+    _advanced_bonus = 0.0
+    if advanced_context:
+        # PIE above league average: player is impactful → higher confidence
+        _pie = advanced_context.get("pie")
+        if _pie is not None:
+            try:
+                pie_val = float(_pie)
+                if pie_val > 1.0:
+                    pie_val = pie_val / 100.0
+                if pie_val > 0.12:
+                    _advanced_bonus += min(3.0, (pie_val - 0.10) * 30.0)
+                elif pie_val < 0.06:
+                    _advanced_bonus -= min(2.0, (0.10 - pie_val) * 20.0)
+            except (TypeError, ValueError):
+                pass
+
+        # E_NET_RATING from estimated metrics: positive = strong overall signal
+        _e_net = advanced_context.get("e_net_rating")
+        if _e_net is not None:
+            try:
+                e_net_val = float(_e_net)
+                # Each +5 net rating → +1.5 confidence bonus, capped ±3
+                net_bonus = (e_net_val / 5.0) * 1.5
+                _advanced_bonus += max(-3.0, min(3.0, net_bonus))
+            except (TypeError, ValueError):
+                pass
+
+        combined_score += _advanced_bonus
+
+    # --- Hustle Stats Confidence Bonus ---
+    # When hustle context is available and aligns with the stat type, add a bonus.
+    _hustle_bonus = 0.0
+    _stat_type_lower = str(stat_type).lower() if stat_type else ""
+    if hustle_context:
+        if _stat_type_lower in ("rebounds", "offensive_rebounds", "defensive_rebounds"):
+            boxouts = hustle_context.get("boxouts", 0.0)
+            if boxouts > 3.5:
+                _hustle_bonus = min(3.0, (boxouts - 2.5) * 1.5)
+        elif _stat_type_lower in ("steals", "blocks_steals"):
+            deflections = hustle_context.get("deflections", 0.0)
+            if deflections > 3.0:
+                _hustle_bonus = min(3.0, (deflections - 2.0) * 1.5)
+        elif _stat_type_lower in ("blocks",):
+            contested = hustle_context.get("contested_shots", 0.0)
+            if contested > 5.0:
+                _hustle_bonus = min(2.0, (contested - 3.0) * 0.5)
+        elif _stat_type_lower in ("assists", "points_assists"):
+            screen_ast = hustle_context.get("screen_assists", 0.0)
+            if screen_ast > 2.0:
+                _hustle_bonus = min(2.0, (screen_ast - 1.0) * 1.0)
+        combined_score += _hustle_bonus
+
     # --- CV Penalty Scaling: harsh penalty for very high variance stats ---
     # BEGINNER NOTE: When a stat has CV > CV_PENALTY_THRESHOLD, the projection
     # is inherently unreliable regardless of other signals.

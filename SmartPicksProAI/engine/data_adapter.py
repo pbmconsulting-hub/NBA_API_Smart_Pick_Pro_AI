@@ -296,6 +296,215 @@ def build_engine_teams_data(teams_rows: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# build_engine_advanced_context
+# ---------------------------------------------------------------------------
+
+def build_engine_advanced_context(
+    advanced_rows: list[dict],
+    estimated_metrics_row: dict | None = None,
+) -> dict:
+    """Build the ``advanced_context`` dict for ``projections.build_player_projection()``.
+
+    Aggregates per-game advanced box score stats (USG_PCT, TS_PCT, PIE,
+    PACE, OFF_RATING, DEF_RATING) into season averages and merges with
+    estimated metrics when available.
+
+    Args:
+        advanced_rows: Box_Score_Advanced rows for the player this season.
+        estimated_metrics_row: Optional Player_Estimated_Metrics row.
+
+    Returns:
+        Dict with keys used by ``_compute_usage_boost()`` and new
+        advanced projection adjustments.
+    """
+    ctx: dict[str, Any] = {}
+
+    if advanced_rows:
+        # Compute averages of key advanced stats across all games
+        _adv_keys = [
+            "usg_pct", "ts_pct", "pie", "pace", "off_rating", "def_rating",
+            "net_rating", "ast_pct", "reb_pct", "efg_pct",
+        ]
+        for key in _adv_keys:
+            vals = []
+            for r in advanced_rows:
+                raw = r.get(key)
+                if raw is not None:
+                    try:
+                        vals.append(float(raw))
+                    except (ValueError, TypeError):
+                        pass
+            if vals:
+                ctx[key] = round(sum(vals) / len(vals), 4)
+
+        # Alias for backward compat with _compute_usage_boost
+        if "usg_pct" in ctx:
+            ctx["usage_pct"] = ctx["usg_pct"]
+
+    # Merge estimated metrics (pre-box-score finalization values)
+    if estimated_metrics_row:
+        for e_key, ctx_key in [
+            ("e_usg_pct", "e_usg_pct"),
+            ("e_pace", "e_pace"),
+            ("e_net_rating", "e_net_rating"),
+            ("e_off_rating", "e_off_rating"),
+            ("e_def_rating", "e_def_rating"),
+            ("e_ast_ratio", "e_ast_ratio"),
+            ("e_reb_pct", "e_reb_pct"),
+            ("e_tov_pct", "e_tov_pct"),
+        ]:
+            raw = estimated_metrics_row.get(e_key)
+            if raw is not None:
+                try:
+                    ctx[ctx_key] = float(raw)
+                except (ValueError, TypeError):
+                    pass
+
+        # Use estimated usage as fallback when box-score USG unavailable
+        if "usage_pct" not in ctx and "e_usg_pct" in ctx:
+            ctx["usage_pct"] = ctx["e_usg_pct"]
+
+    return ctx
+
+
+# ---------------------------------------------------------------------------
+# build_engine_hustle_context
+# ---------------------------------------------------------------------------
+
+def build_engine_hustle_context(hustle_rows: list[dict]) -> dict:
+    """Aggregate hustle stats into a per-game average context dict.
+
+    Hustle stats (deflections, contested shots, screen assists, box outs)
+    are strong signals for rebounds, steals, blocks, and assists.
+
+    Args:
+        hustle_rows: Box_Score_Hustle rows for the player this season.
+
+    Returns:
+        Dict with averaged hustle stats.
+    """
+    if not hustle_rows:
+        return {}
+
+    ctx: dict[str, float] = {}
+    _keys = [
+        "deflections", "contested_shots", "screen_assists",
+        "boxouts", "def_boxouts", "off_boxouts",
+        "loose_balls_total", "charges_drawn",
+        "boxout_player_rebs",
+    ]
+    n = len(hustle_rows)
+    for key in _keys:
+        vals = []
+        for r in hustle_rows:
+            raw = r.get(key)
+            if raw is not None:
+                try:
+                    vals.append(float(raw))
+                except (ValueError, TypeError):
+                    pass
+        if vals:
+            ctx[key] = round(sum(vals) / n, 3)
+
+    return ctx
+
+
+# ---------------------------------------------------------------------------
+# build_engine_clutch_context
+# ---------------------------------------------------------------------------
+
+def build_engine_clutch_context(clutch_row: dict | None) -> dict:
+    """Transform clutch stats into engine-usable context.
+
+    Clutch stats capture how a player performs in close-game situations
+    (last 5 minutes, score within 5 points). Differences from overall
+    stats indicate late-game role changes.
+
+    Args:
+        clutch_row: A Player_Clutch_Stats row, or None.
+
+    Returns:
+        Dict with clutch stat values.
+    """
+    if not clutch_row:
+        return {}
+
+    ctx: dict[str, Any] = {}
+    _keys = [
+        "gp", "min", "pts", "reb", "ast", "stl", "blk", "tov",
+        "fgm", "fga", "fg_pct", "fg3m", "fg3a", "fg3_pct",
+        "ftm", "fta", "ft_pct", "plus_minus",
+    ]
+    for key in _keys:
+        raw = clutch_row.get(key)
+        if raw is not None:
+            try:
+                ctx[key] = float(raw)
+            except (ValueError, TypeError):
+                pass
+
+    return ctx
+
+
+# ---------------------------------------------------------------------------
+# build_engine_matchup_defender_context
+# ---------------------------------------------------------------------------
+
+def build_engine_matchup_defender_context(
+    matchup_rows: list[dict],
+) -> dict:
+    """Aggregate individual defender matchup data into a context dict.
+
+    Uses Box_Score_Matchups to identify who primarily guards the player
+    and how they perform against that specific defender (not just
+    positional averages).
+
+    Args:
+        matchup_rows: Box_Score_Matchups rows where the player is the
+            offensive player (person_id_off = player_id).
+
+    Returns:
+        Dict with primary defender stats and overall matchup quality.
+    """
+    if not matchup_rows:
+        return {}
+
+    # Sort by matchup minutes (descending) to find the primary defender
+    sorted_rows = sorted(
+        matchup_rows,
+        key=lambda r: float(r.get("matchup_min", 0) or 0),
+        reverse=True,
+    )
+
+    # Primary defender = the one who guards this player the most minutes
+    primary = sorted_rows[0] if sorted_rows else None
+    if not primary:
+        return {}
+
+    total_poss = sum(float(r.get("partial_poss", 0) or 0) for r in sorted_rows)
+    total_pts = sum(float(r.get("player_pts", 0) or 0) for r in sorted_rows)
+    total_fgm = sum(float(r.get("matchup_fgm", 0) or 0) for r in sorted_rows)
+    total_fga = sum(float(r.get("matchup_fga", 0) or 0) for r in sorted_rows)
+
+    ctx: dict[str, Any] = {
+        "primary_defender_id": primary.get("person_id_def"),
+        "primary_defender_min": float(primary.get("matchup_min", 0) or 0),
+        "primary_defender_fg_pct": float(primary.get("matchup_fg_pct", 0) or 0),
+        "total_matchup_poss": round(total_poss, 1),
+    }
+
+    # Points per possession against all defenders
+    if total_poss > 0:
+        ctx["pts_per_poss"] = round(total_pts / total_poss, 3)
+
+    # Overall FG% when guarded
+    if total_fga > 0:
+        ctx["matchup_fg_pct_overall"] = round(total_fgm / total_fga, 3)
+
+    return ctx
+
+
+# ---------------------------------------------------------------------------
 # Convenience: extract stat averages from game logs
 # ---------------------------------------------------------------------------
 

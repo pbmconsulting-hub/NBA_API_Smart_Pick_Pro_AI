@@ -339,6 +339,8 @@ def build_player_projection(
     rolling_defensive_data: list | None = None,
     game_context: dict | None = None,
     advanced_context: dict | None = None,
+    hustle_context: dict | None = None,
+    matchup_defender_context: dict | None = None,
 ):
     """
     Build a complete stat projection for one player tonight.
@@ -786,6 +788,167 @@ def build_player_projection(
         projected_points  = _compute_usage_boost(advanced_context, projected_points)
         projected_assists = _compute_usage_boost(advanced_context, projected_assists)
         projected_threes  = _compute_usage_boost(advanced_context, projected_threes)
+    # ============================================================
+    # SECTION: Advanced Box Score Adjustments (PIE, TS%, PACE, OFF/DEF_RATING)
+    # When advanced_context contains real advanced stats from Box_Score_Advanced,
+    # apply them as primary inputs rather than secondary signals.
+    # ============================================================
+    if advanced_context:
+        # PIE (Player Impact Estimate): overall impact signal (league avg ~0.10)
+        # Higher PIE → player is more impactful → slight boost to all counting stats
+        pie_raw = advanced_context.get("pie")
+        if pie_raw is not None:
+            try:
+                pie = float(pie_raw)
+                if pie > 1.0:
+                    pie = pie / 100.0  # Handle percentage format
+                _PIE_LEAGUE_AVG = 0.10
+                # Each 1% PIE above average → +0.8% boost, capped ±6%
+                pie_mult = 1.0 + (pie - _PIE_LEAGUE_AVG) * 0.8
+                pie_mult = max(0.94, min(1.06, pie_mult))
+                if abs(pie_mult - 1.0) >= 0.005:
+                    projected_points *= pie_mult
+                    projected_rebounds *= pie_mult
+                    projected_assists *= pie_mult
+            except (TypeError, ValueError):
+                pass
+
+        # TS% (True Shooting): scoring efficiency signal (league avg ~0.575)
+        # Higher TS% → more points per attempt → boost to points/FTM
+        ts_raw = advanced_context.get("ts_pct")
+        if ts_raw is not None:
+            try:
+                ts = float(ts_raw)
+                if ts > 1.0:
+                    ts = ts / 100.0
+                _TS_LEAGUE_AVG = 0.575
+                # Each 1% TS above average → +0.6% boost to scoring stats, capped ±5%
+                ts_mult = 1.0 + (ts - _TS_LEAGUE_AVG) * 0.6
+                ts_mult = max(0.95, min(1.05, ts_mult))
+                if abs(ts_mult - 1.0) >= 0.005:
+                    projected_points *= ts_mult
+                    # Scale FTM baseline for downstream extended-stats calculation
+                    season_ftm_average = season_ftm_average * ts_mult
+            except (TypeError, ValueError):
+                pass
+
+        # OFF_RATING / DEF_RATING: team context for projections
+        # Player with high off_rating on a team → offensive environment is strong
+        off_rtg = advanced_context.get("off_rating")
+        def_rtg = advanced_context.get("def_rating")
+        if off_rtg is not None and def_rtg is not None:
+            try:
+                off_r = float(off_rtg)
+                def_r = float(def_rtg)
+                net_rtg = off_r - def_r
+                # Positive net rating → player on court is a positive → slight boost
+                # Each +5 net rating → +1.5% boost, capped ±4%
+                net_mult = 1.0 + (net_rtg / 5.0) * 0.015
+                net_mult = max(0.96, min(1.04, net_mult))
+                if abs(net_mult - 1.0) >= 0.005:
+                    projected_points *= net_mult
+                    projected_assists *= net_mult
+            except (TypeError, ValueError):
+                pass
+
+        # PACE from advanced box score: more precise than team-level pace
+        adv_pace = advanced_context.get("pace")
+        if adv_pace is not None:
+            try:
+                player_pace = float(adv_pace)
+                if player_pace > 0 and LEAGUE_AVERAGE_PACE > 0:
+                    # Blend player-level pace with team-level pace (60/40)
+                    adv_pace_factor = player_pace / LEAGUE_AVERAGE_PACE
+                    adv_pace_factor = max(0.90, min(1.10, adv_pace_factor))
+                    pace_factor = 0.6 * adv_pace_factor + 0.4 * pace_factor
+            except (TypeError, ValueError):
+                pass
+    # ============================================================
+    # END SECTION: Advanced Box Score Adjustments
+    # ============================================================
+
+    # ============================================================
+    # SECTION: Hustle Stats Adjustments
+    # Box outs → rebounds, deflections → steals/blocks, screen assists → assists
+    # ============================================================
+    _hustle_reb_mult = 1.0
+    _hustle_stl_mult = 1.0
+    _hustle_blk_mult = 1.0
+    _hustle_ast_mult = 1.0
+    if hustle_context:
+        # Box outs → direct correlation with rebounds
+        boxouts_avg = hustle_context.get("boxouts", 0.0)
+        if boxouts_avg > 0:
+            # League average ~2.5 box outs/game; each +1 above avg → +3% reb boost
+            _BOXOUT_LEAGUE_AVG = 2.5
+            _hustle_reb_mult = 1.0 + (boxouts_avg - _BOXOUT_LEAGUE_AVG) * 0.03
+            _hustle_reb_mult = max(0.92, min(1.10, _hustle_reb_mult))
+
+        # Deflections → steals and blocks correlation
+        deflections_avg = hustle_context.get("deflections", 0.0)
+        if deflections_avg > 0:
+            # League average ~2.0 deflections/game; each +1 above avg → +4% stl/blk boost
+            _DEFL_LEAGUE_AVG = 2.0
+            defl_boost = (deflections_avg - _DEFL_LEAGUE_AVG) * 0.04
+            _hustle_stl_mult = max(0.90, min(1.12, 1.0 + defl_boost))
+            _hustle_blk_mult = max(0.95, min(1.08, 1.0 + defl_boost * 0.5))
+
+        # Screen assists → offensive role indicator for assists
+        screen_ast_avg = hustle_context.get("screen_assists", 0.0)
+        if screen_ast_avg > 0:
+            # League average ~1.0 screen assists/game; high screen assists = facilitator role
+            _SCREEN_AST_LEAGUE_AVG = 1.0
+            _hustle_ast_mult = 1.0 + (screen_ast_avg - _SCREEN_AST_LEAGUE_AVG) * 0.025
+            _hustle_ast_mult = max(0.95, min(1.08, _hustle_ast_mult))
+
+    projected_rebounds *= _hustle_reb_mult
+    projected_assists *= _hustle_ast_mult
+    # ============================================================
+    # END SECTION: Hustle Stats Adjustments
+    # ============================================================
+
+    # ============================================================
+    # SECTION: Individual Matchup Defender Adjustment
+    # When specific defender matchup data is available, override or
+    # blend with positional defense averages for more precision.
+    # ============================================================
+    if matchup_defender_context:
+        # Points per possession against specific defenders
+        ppp = matchup_defender_context.get("pts_per_poss")
+        if ppp is not None:
+            # League average PPP ~1.05; higher = favorable matchup
+            _PPP_LEAGUE_AVG = 1.05
+            try:
+                ppp_val = float(ppp)
+                if ppp_val > 0:
+                    ppp_mult = 1.0 + (ppp_val - _PPP_LEAGUE_AVG) * 0.10
+                    ppp_mult = max(0.94, min(1.08, ppp_mult))
+                    if abs(ppp_mult - 1.0) >= 0.005:
+                        projected_points *= ppp_mult
+                        notes.append(
+                            f"🎯 Individual defender data: PPP={ppp_val:.2f} vs avg {_PPP_LEAGUE_AVG}"
+                        )
+            except (TypeError, ValueError):
+                pass
+
+        # Overall FG% when guarded by tonight's expected defenders
+        matchup_fg = matchup_defender_context.get("matchup_fg_pct_overall")
+        if matchup_fg is not None:
+            try:
+                fg_val = float(matchup_fg)
+                if fg_val > 0:
+                    # League average FG% ~0.465; higher = scoring more efficiently
+                    _FG_LEAGUE_AVG = 0.465
+                    fg_mult = 1.0 + (fg_val - _FG_LEAGUE_AVG) * 0.15
+                    fg_mult = max(0.95, min(1.06, fg_mult))
+                    if abs(fg_mult - 1.0) >= 0.005:
+                        projected_threes *= fg_mult
+            except (TypeError, ValueError):
+                pass
+    # ============================================================
+    # END SECTION: Individual Matchup Defender Adjustment
+    # ============================================================
+
     # Defensive stats (steals/blocks) scale with pace and have minimal home/away effect
     _def_ha_steals = _home_factor_map.get("steals", home_away_factor * 0.2)
     _def_ha_blocks = _home_factor_map.get("blocks", home_away_factor * 0.2)
@@ -793,11 +956,13 @@ def build_player_projection(
         pace_factor * _stat_defense_factors.get("steals", defense_factor) * rest_factor
         * (1.0 + _def_ha_steals)
         * minutes_adjustment_factor
+        * _hustle_stl_mult
     )
     projected_blocks = season_blocks_average * (
         pace_factor * _stat_defense_factors.get("blocks", defense_factor) * rest_factor
         * (1.0 + _def_ha_blocks)
         * minutes_adjustment_factor
+        * _hustle_blk_mult
     )
     projected_turnovers = season_turnovers_average * pace_factor  # Turnovers up with pace
     # Extended stats — scale with pace, rest, and minutes adjustment.
@@ -809,8 +974,8 @@ def build_player_projection(
     projected_fta                = season_fta_average                * _base_mult
     projected_fga                = season_fga_average                * _base_mult
     projected_fgm                = season_fgm_average                * _base_mult
-    projected_offensive_rebounds = season_offensive_rebounds_average * _base_mult
-    projected_defensive_rebounds = season_defensive_rebounds_average * _base_mult
+    projected_offensive_rebounds = season_offensive_rebounds_average * _base_mult * _hustle_reb_mult
+    projected_defensive_rebounds = season_defensive_rebounds_average * _base_mult * _hustle_reb_mult
     projected_personal_fouls     = season_personal_fouls_average     * (pace_factor * rest_factor * minutes_adjustment_factor)
     # Keep single offensive_stat_multiplier for backward compatibility in return dict
     offensive_stat_multiplier = _off_mult("points")
