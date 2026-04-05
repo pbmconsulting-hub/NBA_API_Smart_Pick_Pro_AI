@@ -8,9 +8,6 @@ import pandas as pd
 import streamlit as st
 
 from pages._shared import (
-    nav,
-    show_df,
-    TIER_COLORS,
     ANALYSIS_STAT_TYPES,
     MAX_SEARCH_RESULTS,
 )
@@ -474,7 +471,6 @@ def render() -> None:
         st.caption("Props that tend to move together with this pick.")
         try:
             from engine.correlation import (
-                get_teammate_correlation,
                 get_within_player_cross_stat_correlation,
                 calculate_game_environment_correlation,
             )
@@ -539,7 +535,7 @@ def render() -> None:
         elif sim_mean > 0:
             # Fallback: generate approximate distribution from percentiles
             p10 = sim.get("percentile_10", sim_mean * 0.7)
-            p50 = sim.get("percentile_50", sim_mean)
+            _p50 = sim.get("percentile_50", sim_mean)
             p90 = sim.get("percentile_90", sim_mean * 1.3)
             # p10 to p90 spans ±1.28σ from mean in a normal distribution (total 2.56σ)
             std_est = max((p90 - p10) / 2.56, 1.0)

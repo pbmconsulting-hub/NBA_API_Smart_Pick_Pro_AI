@@ -17,8 +17,8 @@ for _p in (_ROOT, _ROOT / "SmartPicksProAI", _ROOT / "SmartPicksProAI" / "fronte
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import streamlit as st
-import json
+import streamlit as st  # noqa: E402
+import json  # noqa: E402
 
 st.set_page_config(page_title="Settings", page_icon="⚙️", layout="wide")
 

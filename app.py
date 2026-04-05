@@ -21,8 +21,8 @@ for _p in (_ROOT_DIR, _PKG_DIR, str(_PKG_DIR / "frontend")):
     if _p_str not in sys.path:
         sys.path.insert(0, _p_str)
 
-import streamlit as st
-from typing import Any
+import streamlit as st  # noqa: E402
+from typing import Any  # noqa: E402
 
 # ── Page configuration (must be first Streamlit command) ────────────────
 st.set_page_config(

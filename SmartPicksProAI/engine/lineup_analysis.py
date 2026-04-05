@@ -18,7 +18,6 @@ receive unexpected types.
 """
 import logging
 import math
-import itertools
 _logger = logging.getLogger(__name__)
 # ============================================================
 # SECTION: External Imports (graceful fallbacks)

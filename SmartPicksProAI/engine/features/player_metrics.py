@@ -75,7 +75,7 @@ def calculate_per(stats_dict: dict) -> float:
         pts = float(stats_dict.get("pts", 0))
         oreb = float(stats_dict.get("oreb", 0))
         dreb = float(stats_dict.get("dreb", 0))
-        reb = float(stats_dict.get("reb", oreb + dreb))
+        _reb = float(stats_dict.get("reb", oreb + dreb))
         ast = float(stats_dict.get("ast", 0))
         stl = float(stats_dict.get("stl", 0))
         blk = float(stats_dict.get("blk", 0))

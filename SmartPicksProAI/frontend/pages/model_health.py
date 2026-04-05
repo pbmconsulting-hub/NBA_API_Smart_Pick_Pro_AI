@@ -26,7 +26,7 @@ def render() -> None:
     days = days_options[selected_range]
 
     summary = get_calibration_summary(days=days)
-    curve_data = get_isotonic_calibration_curve(days=days)
+    _curve_data = get_isotonic_calibration_curve(days=days)
 
     # ── Overview metrics ──────────────────────────────────────────
     ov_cols = st.columns([1, 1, 1, 1])

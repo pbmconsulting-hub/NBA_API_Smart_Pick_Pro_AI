@@ -33,18 +33,18 @@ except ImportError:
     import logging
     _logger = logging.getLogger(__name__)
 # Import our custom math helpers (built from scratch)
-from engine.math_helpers import (
-    sample_from_normal_distribution,  # Draw a random game result (normal)
+from engine.math_helpers import (  # noqa: E402
+    sample_from_normal_distribution,  # noqa: F401 – Draw a random game result (normal)
     sample_skew_normal,               # C5: Skew-normal for right-skewed NBA stats
     get_stat_skew_param,              # C5: Default skew params by stat type
-    sample_from_kde,                  # C11: KDE sampling from game logs
+    sample_from_kde,                  # noqa: F401 – C11: KDE sampling from game logs
     should_use_kde,                   # C11: Whether to use KDE vs skew-normal
     calculate_mean,                    # Average a list of results
     calculate_standard_deviation,      # Spread of results
     calculate_percentile,              # Find value at percentile
     clamp_probability,                 # Keep probability in 0-1
-    sample_poisson_like,               # Feature 8: Poisson-like for steals/blocks/turnovers
-    sample_zero_inflated,              # Feature 8: Zero-inflated for threes
+    sample_poisson_like,               # noqa: F401 – Feature 8: Poisson-like for steals/blocks/turnovers
+    sample_zero_inflated,              # noqa: F401 – Feature 8: Zero-inflated for threes
     estimate_zero_probability,         # Feature 8: Estimate zero prob from logs
     _kde_bandwidth,                    # KDE bandwidth (Silverman's rule)
 )
@@ -1935,8 +1935,10 @@ def run_sensitivity_analysis(
     def _vary(param_name, base_val, delta):
         low_val  = max(0.0, base_val - delta)
         high_val = base_val + delta
-        low_kwargs  = dict(_base_kwargs); low_kwargs[param_name]  = low_val
-        high_kwargs = dict(_base_kwargs); high_kwargs[param_name] = high_val
+        low_kwargs  = dict(_base_kwargs)
+        low_kwargs[param_name]  = low_val
+        high_kwargs = dict(_base_kwargs)
+        high_kwargs[param_name] = high_val
         low_prob  = run_quantum_matrix_simulation(**low_kwargs).get("probability_over", base_prob)
         high_prob = run_quantum_matrix_simulation(**high_kwargs).get("probability_over", base_prob)
         return {

@@ -1,7 +1,7 @@
 """engine/features/feature_engineering.py – Feature engineering for ML models."""
 import math
 import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from utils.logger import get_logger
 from utils.constants import LEAGUE_AVG_PACE, LEAGUE_AVG_DRTG
 

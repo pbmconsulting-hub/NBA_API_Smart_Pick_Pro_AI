@@ -777,11 +777,6 @@ def enforce_tier_distribution(all_picks_results, max_platinum_pct=0.10, max_gold
         key=lambda r: r.get("confidence_score", 0),
         reverse=True,
     )
-    golds = sorted(
-        [r for r in results if r.get("tier") == "Gold"],
-        key=lambda r: r.get("confidence_score", 0),
-        reverse=True,
-    )
     # Downgrade excess Platinums to Gold
     if len(platinums) > max_platinum:
         excess = platinums[max_platinum:]  # Weakest Platinums (already sorted desc)

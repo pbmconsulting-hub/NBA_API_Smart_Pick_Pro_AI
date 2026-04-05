@@ -9,7 +9,7 @@ import logging
 
 _logger = logging.getLogger(__name__)
 
-from tracking.database import (
+from tracking.database import (  # noqa: E402
     insert_bet,
     update_bet_result,
     load_all_bets,

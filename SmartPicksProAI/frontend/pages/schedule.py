@@ -1,7 +1,7 @@
 """Schedule page (F10: date filter + clickable rows)."""
 import datetime
 import streamlit as st
-from pages._shared import nav, show_df, game_button
+from pages._shared import nav, show_df
 from api_service import get_schedule
 
 

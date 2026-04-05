@@ -42,7 +42,7 @@ def retry_with_backoff(
                 try:
                     return func(*args, **kwargs)
                 except exceptions as e:
-                    last_exception = e
+                    last_exception = e  # noqa: F841
                     if attempt < retries:
                         wait_time = min(delay, max_delay)
                         logger.warning(

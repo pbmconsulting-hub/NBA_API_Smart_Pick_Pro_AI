@@ -4,7 +4,6 @@
 # Standard library only — no numpy/scipy/pandas.
 
 import time
-import datetime
 from collections import deque
 
 try:

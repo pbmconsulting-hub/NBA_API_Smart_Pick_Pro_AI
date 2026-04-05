@@ -34,7 +34,6 @@ class RidgeModel(BaseModel):
             _logger.warning("scikit-learn not available; RidgeModel.train is a no-op")
             return
         try:
-            import numpy as np
             self._scaler = StandardScaler()
             X_scaled = self._scaler.fit_transform(X)
             self._model = Ridge(alpha=self.alpha)

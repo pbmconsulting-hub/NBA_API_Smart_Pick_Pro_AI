@@ -15,8 +15,8 @@ for _p in (_ROOT, _ROOT / "SmartPicksProAI", _ROOT / "SmartPicksProAI" / "fronte
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import streamlit as st
-import pandas as pd
+import streamlit as st  # noqa: E402
+import pandas as pd  # noqa: E402
 
 st.set_page_config(page_title="Import Props", page_icon="📥", layout="wide")
 

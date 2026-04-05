@@ -13,7 +13,7 @@ for _p in (_ROOT, _ROOT / "SmartPicksProAI", _ROOT / "SmartPicksProAI" / "fronte
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import streamlit as st
+import streamlit as st  # noqa: E402
 
 st.set_page_config(page_title="Today's Games", page_icon="🏀", layout="wide")
 

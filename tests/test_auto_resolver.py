@@ -9,7 +9,7 @@ _PKG = _REPO / "SmartPicksProAI"
 if str(_PKG) not in sys.path:
     sys.path.insert(0, str(_PKG))
 
-from tracking.auto_resolver import _name_similarity, _find_player_stat
+from tracking.auto_resolver import _name_similarity, _find_player_stat  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

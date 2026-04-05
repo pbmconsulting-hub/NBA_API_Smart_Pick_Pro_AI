@@ -587,7 +587,7 @@ def should_avoid_prop(
     for force in under_forces:
         if "Blowout" in force.get("name", "") and force.get("strength", 0) > 1.0:
             avoid_reasons.append(
-                f"Strong blowout risk — player may not get full minutes"
+                "Strong blowout risk — player may not get full minutes"
             )
             break
     # Zero-Filter Recovery: never flag a prop as "should_avoid".
@@ -641,14 +641,7 @@ def detect_correlated_props(props_with_results):
         if len(indices) < 2:
             continue  # Only one prop from this game — no correlation
         teams_str = " vs ".join(sorted(game_key))
-        player_names = [props_with_results[i].get("player_name", "?") for i in indices]
-        others_str = ", ".join(
-            props_with_results[j].get("player_name", "?")
-            for j in indices
-            if j != indices[0]  # Will be customized per-prop below
-        )
         for i in indices:
-            my_name = props_with_results[i].get("player_name", "?")
             correlated_names = [
                 props_with_results[j].get("player_name", "?")
                 for j in indices if j != i
@@ -1059,8 +1052,6 @@ def classify_bet_type(
     std_devs_from_line = 0.0
     if stat_standard_deviation > 0 and prop_line > 0:
         std_devs_from_line = (projected_stat - prop_line) / stat_standard_deviation
-    # ── Determine actual model direction ──
-    direction = "OVER" if edge_percentage >= 0 else "UNDER"
     # ── LINE RELIABILITY CHECK ──────────────────────────────────────
     line_verified = True
     line_reliability_warning = None
