@@ -134,7 +134,7 @@ def detect_narrative_tags(game_context: dict) -> list[dict]:
             tags.append(_tag_dict("national_tv"))
 
         # Altitude (Denver)
-        venue = (game_context.get("venue_city") or "").lower()
+        venue = (game_context.get("venue_city") or "").strip().lower()
         is_home = game_context.get("is_home", True)
         if "denver" in venue and not is_home:
             tags.append(_tag_dict("altitude"))

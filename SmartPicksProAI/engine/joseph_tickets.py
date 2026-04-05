@@ -121,11 +121,14 @@ def _empty_ticket(message: str) -> dict[str, Any]:
     }
 
 
+_IMPLIED_PROB_WEIGHT = 20  # Scales implied probability (0-1) into the 0-100 scoring range
+
+
 def _grade_ticket(avg_confidence: float, leg_count: int, implied_prob: float) -> str:
     """Grade a ticket based on confidence, leg count, and implied probability."""
     # Penalize large parlays (diminishing returns)
     leg_penalty = max(0, (leg_count - 3) * 5)
-    score = avg_confidence - leg_penalty + (implied_prob * 20)
+    score = avg_confidence - leg_penalty + (implied_prob * _IMPLIED_PROB_WEIGHT)
     score = max(0, min(100, score))
 
     if score >= 80:

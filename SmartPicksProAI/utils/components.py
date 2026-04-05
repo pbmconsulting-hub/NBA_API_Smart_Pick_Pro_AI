@@ -24,12 +24,26 @@ except ImportError:
     _ST_AVAILABLE = False
 
 try:
-    from styles.theme import get_hero_banner_html, _load_image_b64
+    from styles.theme import get_hero_banner_html
 except ImportError:
     def get_hero_banner_html() -> str:  # type: ignore[misc]
         return ""
 
-    def _load_image_b64(filename: str) -> str:  # type: ignore[misc]
+
+def _load_asset_b64(filename: str) -> str:
+    """Load an asset image as base64 (local helper)."""
+    import os
+    import base64
+    assets_dir = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "assets",
+    )
+    path = os.path.join(assets_dir, filename)
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
         return ""
 
 try:
@@ -134,7 +148,7 @@ def inject_joseph_floating() -> None:
         return
 
     try:
-        avatar_b64 = _load_image_b64("Joseph_M_Smith_Avatar.png")
+        avatar_b64 = _load_asset_b64("Joseph_M_Smith_Avatar.png")
         line = get_ambient_line()
 
         if avatar_b64:

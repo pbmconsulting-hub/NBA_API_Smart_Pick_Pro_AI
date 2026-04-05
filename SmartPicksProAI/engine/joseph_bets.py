@@ -143,9 +143,10 @@ def joseph_get_track_record(
             b for b in all_bets
             if b.get("source") == "joseph_ai"
         ]
-        # If no joseph-specific bets, use all bets as fallback
+        using_all_sources = False
         if not joseph_bets:
             joseph_bets = all_bets
+            using_all_sources = True
 
         recent = joseph_bets[:limit]
 
@@ -155,21 +156,23 @@ def joseph_get_track_record(
         losses = summary.get("losses", 0)
         win_rate = (wins / total * 100) if total > 0 else 0.0
 
+        source_note = " (all sources)" if using_all_sources else ""
+
         if total == 0:
             headline = "No bets tracked yet. Let's get started."
         elif win_rate >= 60:
             headline = (
                 f"🔥 Joseph is ROLLING — {wins}W-{losses}L "
-                f"({win_rate:.0f}% win rate) across {total} tracked bets."
+                f"({win_rate:.0f}% win rate) across {total} tracked bets{source_note}."
             )
         elif win_rate >= 50:
             headline = (
                 f"📊 Solid track record — {wins}W-{losses}L "
-                f"({win_rate:.0f}%) across {total} bets. Grinding profit."
+                f"({win_rate:.0f}%) across {total} bets{source_note}. Grinding profit."
             )
         else:
             headline = (
-                f"⚠️ {wins}W-{losses}L ({win_rate:.0f}%) across {total} bets. "
+                f"⚠️ {wins}W-{losses}L ({win_rate:.0f}%) across {total} bets{source_note}. "
                 f"Variance happens — trust the process."
             )
 
