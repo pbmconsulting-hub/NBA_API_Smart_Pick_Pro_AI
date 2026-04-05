@@ -14,20 +14,9 @@ for each constructed ticket.
 """
 
 import logging
-import math
 from typing import Any
 
 _logger = logging.getLogger(__name__)
-
-try:
-    from engine.correlation import (
-        get_position_correlation_adjustment,
-        get_correlation_confidence,
-    )
-    _CORRELATION_AVAILABLE = True
-except ImportError:
-    _logger.warning("[JosephTickets] Could not import correlation module")
-    _CORRELATION_AVAILABLE = False
 
 
 # ============================================================
@@ -224,7 +213,7 @@ def generate_ticket_pitch(
             parts.append(f"Big swing! {count}-leg parlay on the board.")
 
         # Highlight top leg
-        top_leg = max(legs, key=lambda l: l.get("confidence_score", 0))
+        top_leg = max(legs, key=lambda leg: leg.get("confidence_score", 0))
         top_name = top_leg.get("player_name", "Unknown")
         top_stat = top_leg.get("stat_type", "")
         top_dir = top_leg.get("direction", "OVER")
