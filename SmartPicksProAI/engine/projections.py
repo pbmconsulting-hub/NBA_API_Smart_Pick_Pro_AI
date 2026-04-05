@@ -827,8 +827,8 @@ def build_player_projection(
                 ts_mult = max(0.95, min(1.05, ts_mult))
                 if abs(ts_mult - 1.0) >= 0.005:
                     projected_points *= ts_mult
-                    projected_ftm_tmp = season_ftm_average * ts_mult  # Pre-scale FTM
-                    season_ftm_average = projected_ftm_tmp  # Carry through to extended stats
+                    # Scale FTM baseline for downstream extended-stats calculation
+                    season_ftm_average = season_ftm_average * ts_mult
             except (TypeError, ValueError):
                 pass
 

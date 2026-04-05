@@ -292,7 +292,7 @@ def simulate_game_script(player_projection, game_context, num_simulations=500,
                 clutch_ratio = clutch_rate / stat_per_minute
                 # Clutch ratio > 1.0 = player elevates in crunch time
                 # Clutch ratio < 1.0 = player shrinks in crunch time
-                # Scale: each 10% deviation → 2% Q4 adjustment, capped ±8%
+                # Scale: each 1.0 deviation in ratio → 20% Q4 adjustment, capped ±8%
                 clutch_q4_multiplier = 1.0 + (clutch_ratio - 1.0) * 0.2
                 clutch_q4_multiplier = max(0.92, min(1.08, clutch_q4_multiplier))
 
