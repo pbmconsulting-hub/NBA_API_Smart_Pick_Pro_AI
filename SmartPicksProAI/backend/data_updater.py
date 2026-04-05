@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-from nba_api.stats.endpoints import LeagueGameLog, ScoreboardV3
+from nba_api.stats.endpoints import LeagueGameLog, ScoreboardV2
 
 import initial_pull
 import setup_db
@@ -256,7 +256,7 @@ def _upsert_team_game_stats(
 
 
 def sync_todays_games(conn: sqlite3.Connection) -> int:
-    """Fetch today's scheduled games via ``ScoreboardV3`` and insert them.
+    """Fetch today's scheduled games via ``ScoreboardV2`` and insert them.
 
     Only games whose ``game_id`` is not already in the ``Games`` table are
     inserted.  This ensures that ``GET /api/games/today`` can be answered
@@ -269,36 +269,36 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
         Number of new game rows inserted into the ``Games`` table.
     """
     today_str = date.today().isoformat()
-    logger.info("Syncing today's schedule (%s) via ScoreboardV3 …", today_str)
+    logger.info("Syncing today's schedule (%s) via ScoreboardV2 …", today_str)
 
     try:
         def _fetch_scoreboard():
-            sb = ScoreboardV3(game_date=today_str)
+            sb = ScoreboardV2(game_date=today_str)
             return sb.game_header.get_data_frame(), sb.line_score.get_data_frame()
 
         initial_pull._rate_limited_sleep()
         game_header, line_score = initial_pull._call_with_retries(
             _fetch_scoreboard,
-            description=f"ScoreboardV3({today_str})",
+            description=f"ScoreboardV2({today_str})",
         )
     except Exception:  # Broad: _call_with_retries re-raises whatever the NBA API raises.
         logger.exception(
-            "Failed to fetch ScoreboardV3 for %s after %d attempts.",
+            "Failed to fetch ScoreboardV2 for %s after %d attempts.",
             today_str, initial_pull._MAX_RETRIES,
         )
         return 0
 
     if game_header.empty:
-        logger.info("ScoreboardV3 returned no games for %s.", today_str)
+        logger.info("ScoreboardV2 returned no games for %s.", today_str)
         return 0
 
-    # Pre-convert gameId column to string once to avoid repeated conversions.
-    line_score_game_ids = line_score["gameId"].astype(str)
+    # ScoreboardV2 uses GAME_ID (not gameId) in LineScore.
+    line_score_game_ids = line_score["GAME_ID"].astype(str)
 
     inserted = 0
     cursor = conn.cursor()
     for _, game_row in game_header.iterrows():
-        game_id = str(game_row.get("gameId", ""))
+        game_id = str(game_row.get("GAME_ID", ""))
         if not game_id:
             continue
 
@@ -309,22 +309,23 @@ def sync_todays_games(conn: sqlite3.Connection) -> int:
         if existing:
             continue
 
+        # GameHeader provides HOME_TEAM_ID and VISITOR_TEAM_ID directly.
+        raw_home = game_row.get("HOME_TEAM_ID")
+        raw_away = game_row.get("VISITOR_TEAM_ID")
+        home_team_id = int(raw_home) if raw_home is not None else None
+        away_team_id = int(raw_away) if raw_away is not None else None
+
         # LineScore has 2 rows per game: away team first, home team second.
+        # Use TEAM_ABBREVIATION (not teamTricode) for ScoreboardV2.
         teams = line_score[line_score_game_ids == game_id]
         if len(teams) >= 2:
-            away_tri = teams.iloc[0].get("teamTricode", "")
-            home_tri = teams.iloc[1].get("teamTricode", "")
-            raw_away = teams.iloc[0].get("teamId")
-            raw_home = teams.iloc[1].get("teamId")
-            away_team_id = int(raw_away) if raw_away is not None else None
-            home_team_id = int(raw_home) if raw_home is not None else None
+            away_tri = teams.iloc[0].get("TEAM_ABBREVIATION", "")
+            home_tri = teams.iloc[1].get("TEAM_ABBREVIATION", "")
             matchup = f"{home_tri} vs. {away_tri}"
         else:
             away_tri = ""
             home_tri = ""
-            away_team_id = None
-            home_team_id = None
-            matchup = game_row.get("gameCode", "TBD")
+            matchup = game_row.get("GAMECODE", "TBD")
 
         cursor.execute(
             "INSERT INTO Games (game_id, game_date, season, home_team_id, "

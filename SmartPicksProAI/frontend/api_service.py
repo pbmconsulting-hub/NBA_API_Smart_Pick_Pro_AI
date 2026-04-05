@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8098"
 CACHE_TTL_SECONDS = 3600          # 1 hour — standings, rosters, player bios
 CACHE_TTL_LIVE = 300              # 5 min  — today's games, recent games
 DEFAULT_REQUEST_TIMEOUT = 15
