@@ -94,13 +94,21 @@ def _extract_stat_value(game_log_row, stat_type):
     """
     # Alias map: canonical stat name → list of dict keys to try, in order
     alias_map = {
-        "points":    [stat_type, "pts",  "points"],
-        "rebounds":  [stat_type, "reb",  "rebounds", "total_reb"],
-        "assists":   [stat_type, "ast",  "assists"],
-        "threes":    [stat_type, "fg3m", "3pm",  "threes", "three_pointers"],
-        "steals":    [stat_type, "stl",  "steals"],
-        "blocks":    [stat_type, "blk",  "blocks"],
-        "turnovers": [stat_type, "tov",  "turnovers", "to"],
+        "points":              [stat_type, "pts",  "points"],
+        "rebounds":            [stat_type, "reb",  "rebounds", "total_reb"],
+        "assists":             [stat_type, "ast",  "assists"],
+        "threes":              [stat_type, "fg3m", "3pm",  "threes", "three_pointers"],
+        "steals":              [stat_type, "stl",  "steals"],
+        "blocks":              [stat_type, "blk",  "blocks"],
+        "turnovers":           [stat_type, "tov",  "turnovers", "to"],
+        "ftm":                 [stat_type, "ftm",  "free_throws_made"],
+        "fta":                 [stat_type, "fta",  "free_throws_attempted"],
+        "fgm":                 [stat_type, "fgm",  "field_goals_made"],
+        "fga":                 [stat_type, "fga",  "field_goals_attempted"],
+        "minutes":             [stat_type, "min",  "minutes"],
+        "offensive_rebounds":  [stat_type, "oreb", "offensive_rebounds"],
+        "defensive_rebounds":  [stat_type, "dreb", "defensive_rebounds"],
+        "personal_fouls":      [stat_type, "pf",   "personal_fouls"],
     }
 
     keys_to_try = alias_map.get(stat_type, [stat_type, stat_type + "_avg"])
