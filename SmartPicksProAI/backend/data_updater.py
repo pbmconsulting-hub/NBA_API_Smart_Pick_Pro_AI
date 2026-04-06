@@ -448,9 +448,11 @@ def run_update(db_path: str = DB_PATH) -> int:
         last_date = _get_last_game_date(conn)
         if last_date is None:
             logger.warning(
-                "Games table is empty. Run initial_pull.py first to seed the database."
+                "Games table is empty — running initial_pull to seed the database."
             )
-            return 0
+            conn.close()
+            initial_pull.run_initial_pull(db_path)
+            return -1  # Signal that a full seed was performed.
 
         yesterday = date.today() - timedelta(days=1)
         date_from = last_date + timedelta(days=1)
@@ -528,7 +530,10 @@ def run_update(db_path: str = DB_PATH) -> int:
         )
         return new_log_count
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass  # Already closed before initial_pull fallback.
         logger.info("Database connection closed.")
 
 

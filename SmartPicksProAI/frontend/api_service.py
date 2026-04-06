@@ -45,6 +45,7 @@ Usage::
         get_recent_games,
         get_schedule,
         trigger_refresh,
+        trigger_full_pull,
     )
 """
 
@@ -71,6 +72,7 @@ CACHE_TTL_SECONDS = 3600          # 1 hour — standings, rosters, player bios
 CACHE_TTL_LIVE = 300              # 5 min  — today's games, recent games
 DEFAULT_REQUEST_TIMEOUT = 15
 REFRESH_REQUEST_TIMEOUT = 120
+FULL_PULL_REQUEST_TIMEOUT = 900   # 15 min — full initial pull is long-running
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +414,29 @@ def trigger_refresh() -> dict:
         return resp.json()
     except (requests.RequestException, ValueError) as exc:
         logger.error("Failed to trigger refresh: %s", exc)
+        return {"status": "error", "message": str(exc)}
+
+
+def trigger_full_pull() -> dict:
+    """Trigger a full initial data pull via the backend.
+
+    Calls ``POST /api/admin/full-pull`` which runs the complete
+    ``initial_pull.run_initial_pull()`` pipeline.  This is a long-running
+    operation (several minutes) that seeds every table from scratch.
+
+    Returns:
+        The JSON response dict (``status``, ``message``),
+        or a dict with ``status: "error"`` if the call fails.
+    """
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/api/admin/full-pull",
+            timeout=FULL_PULL_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("Failed to trigger full pull: %s", exc)
         return {"status": "error", "message": str(exc)}
 
 
