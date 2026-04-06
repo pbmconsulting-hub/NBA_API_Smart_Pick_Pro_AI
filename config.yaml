@@ -21,6 +21,11 @@ server:
 nba_api:
   default_season: "2025-26"
   rate_limit_pause_seconds: 0.6  # Delay between NBA API requests
+  league_log_timeout: 120        # Seconds for LeagueGameLog (full-season payloads)
+  per_player_timeout: 60         # Seconds for per-player/team endpoint calls
+  per_game_timeout: 60           # Seconds for per-game box-score calls
+  default_timeout: 60            # Seconds for other NBA API calls
+  max_retries: 5                 # Max retry attempts for failed API calls
 
 # ── External API endpoints ────────────────────────────────────
 external_apis:

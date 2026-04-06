@@ -129,10 +129,11 @@ _TEAM_CONFERENCE_DIVISION: dict[str, tuple[str, str]] = {
 # Retry helper
 # ---------------------------------------------------------------------------
 
-_MAX_RETRIES = 3
+_MAX_RETRIES = 5
 _MAX_RETRIES_PER_PLAYER = 3          # Retries for per-player endpoints.
-_PER_PLAYER_TIMEOUT = 30             # Seconds for per-player calls.
-_PER_GAME_TIMEOUT = 30               # Seconds for per-game box-score calls.
+_PER_PLAYER_TIMEOUT = 60             # Seconds for per-player calls.
+_PER_GAME_TIMEOUT = 60               # Seconds for per-game box-score calls.
+_LEAGUE_LOG_TIMEOUT = 120            # Seconds for LeagueGameLog (large payloads).
 _RATE_LIMIT_DELAY = 0.6              # Seconds between API calls (rate-limit).
 _PLAYER_WORKERS = 3                  # Concurrent threads for per-player fetches.
 _GAME_WORKERS = 3                    # Concurrent threads for per-game fetches.
@@ -225,6 +226,7 @@ def fetch_season_logs(season: str = SEASON) -> pd.DataFrame:
             player_or_team_abbreviation="P",
             season=season,
             season_type_all_star="Regular Season",
+            timeout=_LEAGUE_LOG_TIMEOUT,
         ).get_data_frames()[0],
         description="LeagueGameLog(player)",
     )
@@ -256,6 +258,7 @@ def fetch_team_season_logs(season: str = SEASON) -> pd.DataFrame:
             player_or_team_abbreviation="T",
             season=season,
             season_type_all_star="Regular Season",
+            timeout=_LEAGUE_LOG_TIMEOUT,
         ).get_data_frames()[0],
         description="LeagueGameLog(team)",
     )
@@ -1085,6 +1088,7 @@ def populate_player_clutch_stats(
         conn,
         endpoint_factory=lambda: LeagueDashPlayerClutch(
             season=season, season_type_all_star="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
@@ -1113,6 +1117,7 @@ def populate_team_clutch_stats(
         conn,
         endpoint_factory=lambda: LeagueDashTeamClutch(
             season=season, season_type_all_star="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
@@ -1139,6 +1144,7 @@ def populate_player_hustle_stats(
         conn,
         endpoint_factory=lambda: LeagueHustleStatsPlayer(
             season=season, season_type_all_star="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
@@ -1178,6 +1184,7 @@ def populate_team_hustle_stats(
         conn,
         endpoint_factory=lambda: LeagueHustleStatsTeam(
             season=season, season_type_all_star="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "TEAM_ID": "team_id", "MIN": "min",
@@ -1211,6 +1218,7 @@ def populate_player_bio(
         conn,
         endpoint_factory=lambda: LeagueDashPlayerBioStats(
             season=season, season_type_all_star="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "PLAYER_ID": "player_id", "PLAYER_NAME": "player_name",
@@ -1242,6 +1250,7 @@ def populate_player_estimated_metrics(
         conn,
         endpoint_factory=lambda: PlayerEstimatedMetrics(
             season=season, season_type="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "PLAYER_ID": "player_id", "GP": "gp", "W": "w", "L": "l",
@@ -1266,6 +1275,7 @@ def populate_team_estimated_metrics(
         conn,
         endpoint_factory=lambda: TeamEstimatedMetrics(
             season=season, season_type="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
@@ -1290,6 +1300,7 @@ def populate_league_dash_player_stats(
         conn,
         endpoint_factory=lambda: LeagueDashPlayerStats(
             season=season, season_type_all_star="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "PLAYER_ID": "player_id", "TEAM_ID": "team_id",
@@ -1318,6 +1329,7 @@ def populate_league_dash_team_stats(
         conn,
         endpoint_factory=lambda: LeagueDashTeamStats(
             season=season, season_type_all_star="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "TEAM_ID": "team_id", "GP": "gp", "W": "w", "L": "l",
@@ -1344,6 +1356,7 @@ def populate_league_leaders(
         conn,
         endpoint_factory=lambda: LeagueLeaders(
             season=season, season_type_all_star="Regular Season",
+            timeout=_PER_PLAYER_TIMEOUT,
         ),
         col_map={
             "PLAYER_ID": "player_id", "RANK": "rank", "TEAM": "team",
@@ -1379,6 +1392,7 @@ def populate_standings(
         df = _call_with_retries(
             lambda: LeagueStandingsV3(
                 season=season, season_type="Regular Season",
+                timeout=_PER_PLAYER_TIMEOUT,
             ).get_data_frames()[0],
             description="LeagueStandingsV3",
         )

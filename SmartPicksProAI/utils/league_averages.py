@@ -38,6 +38,7 @@ def refresh_league_averages(season: str = None) -> dict:
             season=season,
             per_mode_detailed="PerGame",
             measure_type_detailed_defense="Base",
+            timeout=60,
         )
         df = stats.get_data_frames()[0]
 

@@ -27,6 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import data_updater
+import initial_pull
 import setup_db
 
 # Ensure the SmartPicksProAI package root is importable so that the
@@ -416,15 +417,47 @@ def refresh_data() -> dict:
     logger.info("POST /api/admin/refresh-data — starting update …")
     try:
         new_records = data_updater.run_update(DB_PATH)
-        message = (
-            f"Added {new_records} new game log records."
-            if new_records > 0
-            else "Database is already up to date — no new records added."
-        )
+        if new_records == -1:
+            message = "Database was empty — ran full initial pull to seed data."
+        elif new_records > 0:
+            message = f"Added {new_records} new game log records."
+        else:
+            message = "Database is already up to date — no new records added."
         logger.info("Refresh complete: %s", message)
-        return {"status": "success", "new_records": new_records, "message": message}
+        return {"status": "success", "new_records": max(new_records, 0), "message": message}
     except Exception as exc:  # Broad catch: wraps entire external update pipeline.
         logger.exception("Error during data refresh.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/full-pull")
+def full_pull() -> dict:
+    """Trigger a full initial data pull from the NBA API.
+
+    Runs :func:`initial_pull.run_initial_pull` which fetches the entire
+    season of game logs and populates every table from scratch.  Use this
+    when the database is empty or when a complete re-seed is needed.
+
+    This is a **long-running** operation (several minutes).
+
+    Returns:
+        JSON with a status message::
+
+            {"status": "success", "message": "Full data pull complete."}
+
+    Raises:
+        HTTPException 500: If the pull fails for any reason.
+    """
+    logger.info("POST /api/admin/full-pull — starting full initial pull …")
+    try:
+        initial_pull.run_initial_pull(DB_PATH)
+        logger.info("Full initial pull complete.")
+        return {
+            "status": "success",
+            "message": "Full data pull complete. Database is seeded and ready.",
+        }
+    except Exception as exc:
+        logger.exception("Error during full initial pull.")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

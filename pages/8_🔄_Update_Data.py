@@ -29,7 +29,7 @@ except ImportError:
         pass
 
 try:
-    from SmartPicksProAI.frontend.api_service import trigger_refresh
+    from SmartPicksProAI.frontend.api_service import trigger_refresh, trigger_full_pull
     _API = True
 except ImportError:
     _API = False
@@ -83,13 +83,18 @@ with tab_refresh:
     st.divider()
 
     st.markdown("### Full Data Sync")
-    st.caption("Pull all data from NBA API. This may take several minutes.")
-    if st.button("🔄 Full Sync", key="btn_full_sync"):
+    st.caption(
+        "Pull **all** data from the NBA API and seed every table from scratch. "
+        "Use this on first run or to completely rebuild the database. "
+        "This may take **10–15 minutes**."
+    )
+    if st.button("🔄 Full ETL Pull", key="btn_full_sync"):
         if _API:
-            with st.spinner("Running full data sync — this may take several minutes…"):
-                result = trigger_refresh()
+            with st.spinner("Running full data pull — this may take 10–15 minutes…"):
+                result = trigger_full_pull()
             if result.get("status") == "success":
-                st.success("✅ Full sync complete!")
+                st.success(f"✅ {result.get('message', 'Full sync complete!')}")
+                st.session_state["last_refresh"] = datetime.datetime.now().isoformat()
             else:
                 st.error(f"Sync failed: {result.get('message', 'Unknown error')}")
         else:
