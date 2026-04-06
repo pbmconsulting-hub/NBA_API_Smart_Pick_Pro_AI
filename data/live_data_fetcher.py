@@ -19,6 +19,7 @@ _logger = logging.getLogger(__name__)
 # ── Rate limiting ───────────────────────────────────────────────────────
 
 _RATE_LIMIT_PAUSE = 0.6  # seconds between API calls
+_API_TIMEOUT = 60        # seconds for NBA API HTTP requests
 _last_request_time: float = 0.0
 
 
@@ -84,7 +85,7 @@ def fetch_todays_scoreboard(game_date: str = "") -> list[dict[str, Any]]:
 
     try:
         _rate_limit()
-        sb = ScoreboardV2(game_date=game_date)
+        sb = ScoreboardV2(game_date=game_date, timeout=_API_TIMEOUT)
         header = sb.game_header.get_data_frame()
         line_score = sb.line_score.get_data_frame()
 
@@ -138,7 +139,7 @@ def fetch_box_score(game_id: str) -> dict[str, Any]:
 
     try:
         _rate_limit()
-        box = BoxScoreTraditionalV2(game_id=game_id)
+        box = BoxScoreTraditionalV2(game_id=game_id, timeout=_API_TIMEOUT)
         players = box.player_stats.get_data_frame()
 
         result: dict[str, Any] = {
@@ -207,6 +208,7 @@ def fetch_player_game_log(
         log = PlayerGameLog(
             player_id=player_id,
             season=season,
+            timeout=_API_TIMEOUT,
         )
         df = log.get_data_frames()[0]
         if last_n > 0:
@@ -230,7 +232,7 @@ def fetch_team_stats(season: str = "2025-26") -> pd.DataFrame:
 
     try:
         _rate_limit()
-        stats = LeagueDashTeamStats(season=season)
+        stats = LeagueDashTeamStats(season=season, timeout=_API_TIMEOUT)
         return stats.get_data_frames()[0]
     except Exception as exc:
         _logger.error("Error fetching team stats: %s", exc)
@@ -248,7 +250,7 @@ def fetch_team_game_log(
 
     try:
         _rate_limit()
-        log = TeamGameLog(team_id=team_id, season=season)
+        log = TeamGameLog(team_id=team_id, season=season, timeout=_API_TIMEOUT)
         df = log.get_data_frames()[0]
         if last_n > 0:
             df = df.head(last_n)
@@ -270,7 +272,7 @@ def fetch_standings(season: str = "2025-26") -> pd.DataFrame:
 
     try:
         _rate_limit()
-        standings = LeagueStandings(season=season)
+        standings = LeagueStandings(season=season, timeout=_API_TIMEOUT)
         return standings.get_data_frames()[0]
     except Exception as exc:
         _logger.error("Error fetching standings: %s", exc)
@@ -289,7 +291,7 @@ def fetch_player_info(player_id: int) -> dict[str, Any]:
 
     try:
         _rate_limit()
-        info = CommonPlayerInfo(player_id=player_id)
+        info = CommonPlayerInfo(player_id=player_id, timeout=_API_TIMEOUT)
         df = info.common_player_info.get_data_frame()
         if df.empty:
             return {}
@@ -333,7 +335,7 @@ def fetch_league_player_stats(
 
     try:
         _rate_limit()
-        stats = LeagueDashPlayerStats(season=season, per_mode_detailed=per_mode)
+        stats = LeagueDashPlayerStats(season=season, per_mode_detailed=per_mode, timeout=_API_TIMEOUT)
         return stats.get_data_frames()[0]
     except Exception as exc:
         _logger.error("Error fetching league player stats: %s", exc)
@@ -383,6 +385,7 @@ def fetch_player_splits(
         splits = PlayerDashboardByGameSplits(
             player_id=player_id,
             season=season,
+            timeout=_API_TIMEOUT,
         )
         return {
             "by_location": splits.by_location_player_dashboard.get_data_frame(),
